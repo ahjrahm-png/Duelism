@@ -491,6 +491,46 @@
 <div id="modalRoot"></div>
 <div id="tooltip"></div>
 
+<script type="module">
+  // Loads the Firebase SDK straight from Google's CDN as ES modules — no npm/build step, so this
+  // file stays a single self-contained HTML page. This runs in its own module scope (imports only
+  // work inside modules), so it exposes a small, plain-function wrapper on window.FB for the rest
+  // of the (non-module) game script to call, rather than converting the whole codebase to a module.
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+  import {
+    getDatabase, ref, set, get, update, onValue, off, onDisconnect
+  } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAhOdwmxSHcva73CheWelt9EijL7sMzdpI",
+    authDomain: "duelism.firebaseapp.com",
+    databaseURL: "https://duelism-default-rtdb.firebaseio.com/",
+    projectId: "duelism",
+    storageBucket: "duelism.firebasestorage.app",
+    messagingSenderId: "253242886715",
+    appId: "1:253242886715:web:2864efbfd0286464fa2a1e",
+  };
+
+  let db = null;
+  try{
+    const app = initializeApp(firebaseConfig);
+    db = getDatabase(app);
+  }catch(err){
+    console.error("Firebase failed to initialize:", err);
+  }
+
+  window.FB = {
+    ready: !!db,
+    ref: (path) => db ? ref(db, path) : null,
+    set: (r, val) => set(r, val),
+    get: (r) => get(r),
+    update: (r, val) => update(r, val),
+    onValue: (r, cb) => onValue(r, cb),
+    off: (r) => off(r),
+    onDisconnectSet: (r, val) => onDisconnect(r).set(val),
+  };
+</script>
+
 <script>
 /* ============================= DATA MODEL ============================= */
 
@@ -2797,206 +2837,164 @@ function showSettings(){
   };
 }
 
-// ---- Multiplayer (real P2P via WebRTC) -----------------------------------------------------
-// Genuine peer-to-peer connection, no server, no account. Two browsers exchange one offer and one
-// answer (as links or codes), then talk directly over an RTCDataChannel from then on. Since there's
-// no signaling server to relay a live trickle of ICE candidates, this uses "non-trickle" ICE: wait
-// for local candidate gathering to finish (bounded by a timeout, in case a STUN server is ever
-// unreachable) and ship everything gathered so far in one blob.
-const RTC_ICE_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-// Same-origin cross-tab channel. Its job: when a reply link opens in a *new* tab (the normal case —
-// clicking a link from Messages/Discord/email opens a new tab, not the one that's already hosting),
-// that new tab relays the reply to whichever tab is still open and actually waiting to hear it,
-// without navigating that tab (which would destroy its live, in-progress connection). If no tab is
-// listening — different device, or the hosting tab was closed — the relay times out and the new tab
-// falls back to a plain manual-paste screen instead of silently pretending it worked.
-const MP_RELAY_CHANNEL_NAME = "duelism-mp-relay";
+// ---- Multiplayer (real-time via Firebase Realtime Database) ---------------------------------
+// Two browsers share a small "room" record in a cloud database instead of connecting directly to
+// each other. Whoever hosts creates the room and gets a short code; whoever joins just needs that
+// code. Moves sync by each side writing its current game state into the room, and reading whatever
+// the other side last wrote — no handshake, no offer/answer exchange, no ICE. The tradeoff for that
+// simplicity is that Firebase (a real, third-party server) is now part of the path your moves take,
+// and it needs to be up for the game to sync — see the project's Realtime Database console for status.
+const MP_ROOM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I — easy to read aloud or type
 
-let mpPeerConnection = null;
-let mpDataChannel = null;
-let mpLocalPlayerNumber = null;  // 1 (host) or 2 (joined via a link) once connected
+let mpRoomCode = null;
+let mpLocalPlayerNumber = null;  // 1 (host) or 2 (joined via a code/link) once connected
 let mpApplyingRemoteState = false; // guards render() from re-broadcasting a state we just received
 let mpLastSentStateCode = null;
-let mpHostRelayChannel = null;
-let mpConnected = false; // derived from the real data channel's open/close — Save/Load reads this
+let mpConnected = false; // derived from the other player's presence flag in the room
+let mpStateRef = null;
+let mpPresenceRef = null;
+let mpLoadRequestRef = null;
+let mpLoadResponseRef = null;
 let mpOnConnectionOpen = null;   // callback(playerNumber) — set by whichever screen is showing
 let mpOnConnectionClosed = null; // callback()
 let mpOnLoadRequest = null;      // callback(loadedState) — handled globally, not screen-specific
 let mpOnLoadResponse = null;     // callback(accepted)
 
-function waitForIceGatheringComplete(pc, timeoutMs=5000){
-  if(pc.iceGatheringState==="complete") return Promise.resolve();
-  return new Promise(resolve=>{
-    const timer = setTimeout(()=>{ pc.removeEventListener("icegatheringstatechange", check); resolve(); }, timeoutMs);
-    function check(){
-      if(pc.iceGatheringState==="complete"){
-        clearTimeout(timer);
-        pc.removeEventListener("icegatheringstatechange", check);
-        resolve();
-      }
-    }
-    pc.addEventListener("icegatheringstatechange", check);
-  });
+function generateRoomCode(){
+  let code = "";
+  for(let i=0;i<5;i++) code += MP_ROOM_CODE_CHARS[Math.floor(Math.random()*MP_ROOM_CODE_CHARS.length)];
+  return code;
+}
+
+function roomLink(code){
+  // origin/pathname only resolve to something another device can reach if this file is actually
+  // hosted somewhere, not opened as a local file:// copy — see the note shown below the button.
+  return `${location.origin}${location.pathname}?room=${code}`;
 }
 
 function teardownMpConnection(){
-  stopHostRelayListener();
-  if(mpDataChannel){ try{ mpDataChannel.close(); }catch(err){} }
-  if(mpPeerConnection){ try{ mpPeerConnection.close(); }catch(err){} }
-  mpDataChannel = null;
-  mpPeerConnection = null;
+  if(!window.FB?.ready) { mpRoomCode = null; mpLocalPlayerNumber = null; mpConnected = false; return; }
+  if(mpStateRef) window.FB.off(mpStateRef);
+  if(mpPresenceRef) window.FB.off(mpPresenceRef);
+  if(mpLoadRequestRef) window.FB.off(mpLoadRequestRef);
+  if(mpLoadResponseRef) window.FB.off(mpLoadResponseRef);
+  mpStateRef = mpPresenceRef = mpLoadRequestRef = mpLoadResponseRef = null;
+  mpRoomCode = null;
   mpLocalPlayerNumber = null;
   mpConnected = false;
 }
 
-function wireMpDataChannel(channel){
-  mpDataChannel = channel;
-  channel.onopen = ()=>{
-    mpConnected = true;
-    mpLastSentStateCode = null;
-    stopHostRelayListener(); // connection is live now, no more need to relay-listen for a reply
-    if(mpLocalPlayerNumber===1) sendMpMessage({type:"state", code: encodeGameState()});
-    if(mpOnConnectionOpen) mpOnConnectionOpen(mpLocalPlayerNumber);
-  };
-  const handleClose = ()=>{
-    if(!mpConnected) return; // already handled
-    mpConnected = false;
-    if(mpOnConnectionClosed) mpOnConnectionClosed();
-  };
-  channel.onclose = handleClose;
-  channel.onerror = handleClose;
-  channel.onmessage = (e)=>{
-    let msg;
-    try{ msg = JSON.parse(e.data); }catch(err){ return; }
-    handleMpMessage(msg);
-  };
+// Explicit "I'm leaving" — separate from teardownMpConnection() so the other player finds out
+// immediately, rather than waiting on Firebase's onDisconnect (which only fires once the browser
+// itself notices the connection is gone — fine for an accidental drop, slower for a deliberate one).
+async function mpLeaveRoom(){
+  if(mpRoomCode && mpLocalPlayerNumber && window.FB?.ready){
+    const field = mpLocalPlayerNumber===1 ? "hostPresent" : "guestPresent";
+    try{ await window.FB.set(window.FB.ref(`rooms/${mpRoomCode}/${field}`), false); }catch(err){}
+  }
+  teardownMpConnection();
 }
 
-function wireMpConnectionLifecycle(pc){
-  pc.oniceconnectionstatechange = ()=>{
-    if(pc.iceConnectionState==="disconnected"){
-      // Transient blip — try to recover quietly before treating it as a real drop.
-      pc.restartIce?.();
-    } else if((pc.iceConnectionState==="failed" || pc.iceConnectionState==="closed") && mpConnected){
+function subscribeToRoom(code){
+  mpStateRef = window.FB.ref(`rooms/${code}/state`);
+  window.FB.onValue(mpStateRef, (snapshot)=>{
+    const code2 = snapshot.val();
+    if(!code2 || code2===mpLastSentStateCode) return; // our own write echoing back — ignore
+    mpApplyingRemoteState = true;
+    try{ state = decodeGameState(code2); selectedUnit = null; render(); }
+    catch(err){ /* malformed/out-of-sync packet — keep local state rather than crash */ }
+    mpApplyingRemoteState = false;
+  });
+
+  mpPresenceRef = window.FB.ref(`rooms/${code}`);
+  window.FB.onValue(mpPresenceRef, (snapshot)=>{
+    const data = snapshot.val();
+    if(!data) return;
+    const otherPresent = mpLocalPlayerNumber===1 ? !!data.guestPresent : !!data.hostPresent;
+    if(otherPresent && !mpConnected){
+      mpConnected = true;
+      if(mpOnConnectionOpen) mpOnConnectionOpen(mpLocalPlayerNumber);
+    } else if(!otherPresent && mpConnected){
       mpConnected = false;
       if(mpOnConnectionClosed) mpOnConnectionClosed();
     }
-  };
+  });
+
+  mpLoadRequestRef = window.FB.ref(`rooms/${code}/loadRequest`);
+  window.FB.onValue(mpLoadRequestRef, (snapshot)=>{
+    const req = snapshot.val();
+    if(!req || req.from===mpLocalPlayerNumber) return; // ignore our own request echoing back
+    let loaded;
+    try{ loaded = decodeGameState(req.code); } catch(err){ return; }
+    if(mpOnLoadRequest) mpOnLoadRequest(loaded);
+  });
+
+  mpLoadResponseRef = window.FB.ref(`rooms/${code}/loadResponse`);
+  window.FB.onValue(mpLoadResponseRef, (snapshot)=>{
+    const resp = snapshot.val();
+    if(!resp || resp.from===mpLocalPlayerNumber) return; // ignore our own response echoing back
+    if(mpOnLoadResponse) mpOnLoadResponse(!!resp.accepted);
+  });
 }
 
-function sendMpMessage(msg){
-  if(mpDataChannel && mpDataChannel.readyState==="open"){
-    mpDataChannel.send(JSON.stringify(msg));
-  }
+async function mpHostRoom(){
+  if(!window.FB?.ready) throw new Error("Firebase isn't set up");
+  teardownMpConnection();
+  const code = generateRoomCode();
+  mpRoomCode = code;
+  mpLocalPlayerNumber = 1;
+  const roomRef = window.FB.ref(`rooms/${code}`);
+  await window.FB.set(roomRef, {
+    createdAt: Date.now(),
+    hostPresent: true,
+    guestPresent: false,
+    state: encodeGameState(),
+  });
+  window.FB.onDisconnectSet(window.FB.ref(`rooms/${code}/hostPresent`), false);
+  subscribeToRoom(code);
+  return code;
 }
 
-function handleMpMessage(msg){
-  if(msg.type==="state"){
+async function mpJoinRoom(rawCode){
+  if(!window.FB?.ready) throw new Error("Firebase isn't set up");
+  const code = rawCode.trim().toUpperCase();
+  const roomRef = window.FB.ref(`rooms/${code}`);
+  const snapshot = await window.FB.get(roomRef);
+  if(!snapshot.exists()) throw new Error("That room code doesn't exist");
+  teardownMpConnection();
+  mpRoomCode = code;
+  mpLocalPlayerNumber = 2;
+  await window.FB.update(roomRef, { guestPresent: true });
+  window.FB.onDisconnectSet(window.FB.ref(`rooms/${code}/guestPresent`), false);
+  subscribeToRoom(code);
+  const data = snapshot.val();
+  if(data?.state){
     mpApplyingRemoteState = true;
-    try{
-      state = decodeGameState(msg.code);
-      selectedUnit = null;
-      render();
-    }catch(err){ /* malformed/out-of-sync packet — keep local state rather than crash */ }
+    try{ state = decodeGameState(data.state); selectedUnit = null; render(); } catch(err){}
     mpApplyingRemoteState = false;
-  } else if(msg.type==="loadRequest"){
-    try{
-      const loaded = decodeGameState(msg.code);
-      if(mpOnLoadRequest) mpOnLoadRequest(loaded);
-    }catch(err){}
-  } else if(msg.type==="loadResponse"){
-    if(mpOnLoadResponse) mpOnLoadResponse(!!msg.accepted);
   }
+  mpConnected = true;
+  if(mpOnConnectionOpen) mpOnConnectionOpen(mpLocalPlayerNumber);
 }
 
 // Called from render() itself — see the guard against re-broadcasting a state we just received,
 // and the dedup against unchanged state so this stays cheap regardless of how often render() runs.
 function broadcastStateIfChanged(){
-  if(!mpDataChannel || mpDataChannel.readyState!=="open" || mpApplyingRemoteState) return;
+  if(!mpConnected || !mpRoomCode || mpApplyingRemoteState || !window.FB?.ready) return;
   const code = encodeGameState();
   if(code===mpLastSentStateCode) return;
   mpLastSentStateCode = code;
-  sendMpMessage({type:"state", code});
+  window.FB.set(window.FB.ref(`rooms/${mpRoomCode}/state`), code).catch(()=>{});
 }
 
 // Local hotseat play already restricts interaction to state.current's own pieces; this adds the
 // networked restriction on top — once connected, only the player this browser was assigned as can
 // act, and only on their own turn.
 function isMyTurnOrLocal(){
-  return !mpDataChannel || mpDataChannel.readyState!=="open" || mpLocalPlayerNumber===state.current;
+  return !mpConnected || mpLocalPlayerNumber===state.current;
 }
 
-async function mpCreateHostOffer(){
-  teardownMpConnection();
-  mpLocalPlayerNumber = 1;
-  mpPeerConnection = new RTCPeerConnection(RTC_ICE_CONFIG);
-  wireMpConnectionLifecycle(mpPeerConnection);
-  wireMpDataChannel(mpPeerConnection.createDataChannel("duelism"));
-  const offer = await mpPeerConnection.createOffer();
-  await mpPeerConnection.setLocalDescription(offer);
-  await waitForIceGatheringComplete(mpPeerConnection);
-  startHostRelayListener();
-  return btoa(JSON.stringify(mpPeerConnection.localDescription));
-}
-
-async function mpCreateJoinerAnswer(offerBlob){
-  teardownMpConnection();
-  mpLocalPlayerNumber = 2;
-  mpPeerConnection = new RTCPeerConnection(RTC_ICE_CONFIG);
-  wireMpConnectionLifecycle(mpPeerConnection);
-  mpPeerConnection.ondatachannel = e => wireMpDataChannel(e.channel);
-  const offer = JSON.parse(atob(offerBlob.trim()));
-  await mpPeerConnection.setRemoteDescription(offer);
-  const answer = await mpPeerConnection.createAnswer();
-  await mpPeerConnection.setLocalDescription(answer);
-  await waitForIceGatheringComplete(mpPeerConnection);
-  return btoa(JSON.stringify(mpPeerConnection.localDescription));
-}
-
-async function mpApplyHostAnswer(answerBlob){
-  if(!mpPeerConnection) throw new Error("No connection in progress");
-  const answer = JSON.parse(atob(answerBlob.trim()));
-  await mpPeerConnection.setRemoteDescription(answer);
-}
-
-// Listens on the hosting tab for a reply relayed from whatever tab the friend's link opened in.
-function startHostRelayListener(){
-  stopHostRelayListener();
-  mpHostRelayChannel = new BroadcastChannel(MP_RELAY_CHANNEL_NAME);
-  mpHostRelayChannel.onmessage = async (e)=>{
-    if(e.data?.type==="answer" && mpPeerConnection && mpPeerConnection.signalingState==="have-local-offer"){
-      try{
-        await mpApplyHostAnswer(e.data.answerBlob);
-        mpHostRelayChannel.postMessage({type:"connected"});
-      }catch(err){ /* malformed reply — ignore, keep waiting */ }
-    }
-  };
-}
-function stopHostRelayListener(){
-  if(mpHostRelayChannel){ mpHostRelayChannel.close(); mpHostRelayChannel=null; }
-}
-
-// Called from the tab that just opened a reply link. Resolves true if a live hosting tab picked it
-// up and connected, false if nothing answered within the timeout (different device, or that tab's
-// been closed) — the caller falls back to a manual-paste screen in the false case.
-function relayAnswerToHostTab(answerBlob){
-  return new Promise(resolve=>{
-    const ch = new BroadcastChannel(MP_RELAY_CHANNEL_NAME);
-    let done = false;
-    const timer = setTimeout(()=>{ if(!done){ done=true; ch.close(); resolve(false); } }, 3500);
-    ch.onmessage = (e)=>{
-      if(e.data?.type==="connected" && !done){
-        done = true;
-        clearTimeout(timer);
-        ch.close();
-        resolve(true);
-      }
-    };
-    ch.postMessage({type:"answer", answerBlob});
-  });
-}
-
-let mpDemoTimer = null; // still used for small UI-only transition delays (e.g. a brief "Loaded!" beat)
+let mpDemoTimer = null; // small UI-only transition delays (e.g. a brief "Loaded!" beat)
 let mpDotsInterval = null;
 
 // Idle "waiting" indicator that cycles a trailing "." / ".." / "..." rather than sitting static,
@@ -3090,22 +3088,6 @@ function showMultiplayer(entry){
     return "Copy failed — try again or check clipboard permissions";
   }
 
-  // ---- Direct Connect (P2P / WebRTC, no backend at all) --------------------------------------
-  // Real implementation: "Start" calls RTCPeerConnection.createOffer(), and the resulting SDP is
-  // what gets shown/copied as the blob (JSON.stringify(pc.localDescription) instead of random
-  // characters here). The receiving side does setRemoteDescription(offer) then createAnswer() to
-  // produce its own reply blob; "Start" finishes with setRemoteDescription(answer) and the two
-  // browsers connect directly — no room, no database, nothing stored anywhere in between.
-  function offerLink(offerBlob){
-    // origin/pathname only resolve to something another device can reach if this file is actually
-    // hosted somewhere, not opened as a local file:// copy — see the note shown below the button.
-    return `${location.origin}${location.pathname}?connect=${encodeURIComponent(offerBlob)}`;
-  }
-
-  function answerLink(answerBlob){
-    return `${location.origin}${location.pathname}?answer=${encodeURIComponent(answerBlob)}`;
-  }
-
   function pasteBlock(id, placeholder){
     return `<textarea id="${id}" rows="3" placeholder="${placeholder}" style="
       width:100%; box-sizing:border-box; resize:none; font-family:monospace; font-size:11.5px;
@@ -3125,23 +3107,26 @@ function showMultiplayer(entry){
   async function renderStart(){
     mpOnConnectionOpen = ()=>renderConnected();
     mpOnConnectionClosed = ()=>renderDisconnected();
-    modal.innerHTML = `<h3>Host a New Game</h3><p>Setting up your connection…</p>`;
+    modal.innerHTML = `<h3>Host a New Game</h3><p>Creating your room…</p>`;
     addOpts([{ label:"Close", onClick: closeModal, secondary:true }]);
-    let offerBlob;
-    try{ offerBlob = await mpCreateHostOffer(); }
-    catch(err){ renderError("Host a New Game", "Couldn't start a connection — your browser may not support WebRTC, or it's blocked here."); return; }
+    if(!window.FB?.ready){
+      renderError("Host a New Game", "Couldn't reach the database — check that Firebase is set up correctly.");
+      return;
+    }
+    let code;
+    try{ code = await mpHostRoom(); }
+    catch(err){ renderError("Host a New Game", "Couldn't create a room — check your connection and try again."); return; }
     const isLocalFile = location.protocol==="file:";
     modal.innerHTML = `
       <h3>Host a New Game</h3>
-      <p>Send this link to your friend — opening it takes them straight into joining your game.</p>
+      <p>Send this link to your friend — opening it takes them straight into your game.</p>
       ${isLocalFile ? `<p style="font-size:11px; opacity:.7; color:var(--red);">This copy is a local file, so the link would only open on this computer. Hosting it (e.g. GitHub Pages) would make it work for anyone.</p>` : ``}
-      <p style="font-size:11px; opacity:.6;">Pastes as a clickable "Join my Duelism game!" link in email/Discord/Slack, or as a plain link anywhere that doesn't support rich text.</p>
+      <p style="font-size:11px; opacity:.6;">Pastes as a clickable "Join my Duelism game!" link in email/Discord/Slack, or as a plain link anywhere that doesn't support rich text. Or just share the code: <b style="color:var(--gold); letter-spacing:.15em;">${code}</b></p>
       <p id="mpWaitingText" style="margin-top:14px;"></p>
-      <p style="font-size:11px; opacity:.6;">Once they reply, open the link they send back to connect.</p>
     `;
     addOpts([
       { label:"Copy Link", onClick: async (e)=>{
-          const result = await copyMaskedLink(offerLink(offerBlob), "Join my Duelism game!");
+          const result = await copyMaskedLink(roomLink(code), "Join my Duelism game!");
           e.target.textContent = copyResultLabel(result);
           setTimeout(()=>{ if(e.target) e.target.textContent = "Copy Link"; }, 1800);
         } },
@@ -3150,147 +3135,66 @@ function showMultiplayer(entry){
     startWaitingDots("mpWaitingText", "Waiting for your friend to join");
   }
 
-  function renderAnswer(prefillOffer){
+  function renderJoinInput(prefillCode){
     modal.innerHTML = `
       <h3>Join Game</h3>
-      <p>Paste the code — or open the link — your friend sent you.</p>
-      ${pasteBlock("mpOfferIn", "Paste their code here…")}
-      <p id="mpAnswerNote" style="font-size:11px; opacity:.6;">${prefillOffer ? "Code filled in from your link — just hit Generate Reply Code." : "Connects once you generate a reply and send it back."}</p>
+      <p>Enter the code — or open the link — your friend sent you.</p>
+      <input id="mpCodeInput" maxlength="5" placeholder="XXXXX" style="
+        width:100%; box-sizing:border-box; text-align:center; font-size:22px; letter-spacing:.3em;
+        text-transform:uppercase; padding:12px; margin:8px 0; border-radius:8px; outline:none;
+        border:1px solid var(--line); background:var(--bg); color:var(--gold); font-family:inherit;
+      ">
+      <p id="mpJoinError" style="font-size:12px; color:var(--red); min-height:1.2em;"></p>
     `;
     addOpts([
-      { label:"Generate Reply Code", onClick: ()=>{
-          const val = document.getElementById("mpOfferIn").value.trim();
-          if(!val) return;
-          renderReply(val);
+      { label:"Join", onClick: ()=>{
+          const val = document.getElementById("mpCodeInput").value.trim();
+          if(val.length<5) return;
+          renderJoining(val);
         } },
       { label:"Back", onClick: ()=>backTo(renderStart), secondary:true },
     ]);
-    if(prefillOffer) document.getElementById("mpOfferIn").value = prefillOffer;
+    const input = document.getElementById("mpCodeInput");
+    input.oninput = ()=>{ input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g,""); };
+    if(prefillCode) input.value = prefillCode.toUpperCase().slice(0,5);
   }
 
-  async function renderReply(offerBlob){
+  async function renderJoining(code){
     mpOnConnectionOpen = ()=>renderConnected();
     mpOnConnectionClosed = ()=>renderDisconnected();
-    modal.innerHTML = `<h3>Join Game</h3><p>Setting up your connection…</p>`;
-    addOpts([{ label:"Back", onClick: ()=>backTo(()=>renderAnswer()), secondary:true }]);
-    let answerBlob;
-    try{ answerBlob = await mpCreateJoinerAnswer(offerBlob); }
-    catch(err){ renderError("Join Game", "That link or code looks invalid or damaged — ask your friend for a fresh one."); return; }
-    modal.innerHTML = `
-      <h3>Join Game</h3>
-      <p>Send your join code back to the host — opening it finishes connecting you automatically.</p>
-      <p id="mpWaitingText" style="margin-top:14px;"></p>
-    `;
-    addOpts([
-      { label:"Copy Join Code", onClick: async (e)=>{
-          const result = await copyMaskedLink(answerLink(answerBlob), "Here's my reply — join my Duelism game!");
-          e.target.textContent = result==="failed" ? "Copy failed — try again" : (result==="masked" ? "Copied!" : "Copied (plain link)");
-          setTimeout(()=>{ if(e.target) e.target.textContent = "Copy Join Code"; }, 1800);
-        } },
-      { label:"Back", onClick: ()=>backTo(()=>renderAnswer()), secondary:true },
-    ]);
-    startWaitingDots("mpWaitingText", "Waiting for Host to respond");
-  }
-
-  async function renderRelayingAnswer(answerBlob){
-    modal.innerHTML = `
-      <h3>Multiplayer</h3>
-      <p id="mpWaitingText"></p>
-      <p style="font-size:11px; opacity:.6;">This only works if the tab where you started hosting is still open.</p>
-    `;
+    modal.innerHTML = `<h3>Join Game</h3><p>Joining room ${code}…</p>`;
     addOpts([]);
-    startWaitingDots("mpWaitingText", "Connecting your other tab");
-    const success = await relayAnswerToHostTab(answerBlob);
-    if(mpDotsInterval){ clearInterval(mpDotsInterval); mpDotsInterval = null; }
-    if(success){
-      modal.innerHTML = `
-        <h3>Multiplayer</h3>
-        <p style="color:var(--gold); font-size:14px;">✓ Connected in your other tab!</p>
-        <p style="font-size:11px; opacity:.6;">You can close this one and switch back to your game.</p>
-      `;
-      addOpts([{ label:"Close", onClick: closeModal, secondary:true }]);
-    } else {
-      renderReplyMismatch(answerBlob);
+    if(!window.FB?.ready){
+      renderError("Join Game", "Couldn't reach the database — check that Firebase is set up correctly.");
+      return;
     }
-  }
-
-  function renderReplyMismatch(answerBlob){
-    modal.innerHTML = `
-      <h3>Multiplayer</h3>
-      <p>Couldn't find the tab that started hosting — it may be on a different device, or that tab may have been closed.</p>
-      <p style="margin-top:14px;">If it's still open somewhere, paste this reply there instead:</p>
-      ${answerBlob ? pasteBlock("mpAnswerShow", "") : ""}
-      ${pasteBlock("mpAnswerIn", "Or paste a reply code here to connect this tab instead…")}
-      <p id="mpP2PNote" style="font-size:11px; opacity:.6;"></p>
-    `;
-    if(answerBlob) document.getElementById("mpAnswerShow").value = answerBlob;
-    addOpts([
-      { label:"Connect", onClick: async ()=>{
-          const val = document.getElementById("mpAnswerIn").value.trim();
-          if(!val) return;
-          document.getElementById("mpP2PNote").textContent = "Connecting…";
-          mpOnConnectionOpen = ()=>renderConnected();
-          mpOnConnectionClosed = ()=>renderDisconnected();
-          try{ await mpApplyHostAnswer(val); }
-          catch(err){ document.getElementById("mpP2PNote").textContent = "That code doesn't look valid."; }
-        } },
-      { label:"Close", onClick: closeModal, secondary:true },
-    ]);
+    try{ await mpJoinRoom(code); }
+    catch(err){
+      modal.innerHTML = `<h3>Join Game</h3><p style="color:var(--red);">${err.message || "Couldn't join that room."}</p>`;
+      addOpts([
+        { label:"Try Again", onClick: ()=>renderJoinInput(code) },
+        { label:"Close", onClick: closeModal, secondary:true },
+      ]);
+    }
   }
 
   function renderConnected(){
     modal.innerHTML = `
       <h3>Multiplayer</h3>
       <p style="color:var(--gold); font-size:14px;">✓ Connected!</p>
-      <p style="font-size:11px; opacity:.6;">You're playing as Player ${mpLocalPlayerNumber}. Brief hiccups (wifi blips, a phone losing signal for a second) reconnect quietly on their own; only a real drop — a closed tab, a reload, a longer outage — needs a new link.</p>
+      <p style="font-size:11px; opacity:.6;">You're playing as Player ${mpLocalPlayerNumber}, room ${mpRoomCode}. If your friend's connection drops, they can rejoin any time with the same code — your game stays exactly where it is.</p>
     `;
     addOpts([
       { label:"Close", onClick: closeModal, secondary:true },
-      { label:"Disconnect", onClick: ()=>{ teardownMpConnection(); renderDisconnected(); }, secondary:true },
+      { label:"Leave Room", onClick: async ()=>{ await mpLeaveRoom(); renderStart(); }, secondary:true },
     ]);
   }
 
   function renderDisconnected(){
     modal.innerHTML = `
       <h3>Multiplayer</h3>
-      <p style="color:var(--red); font-size:14px;">Connection lost.</p>
-      <p style="font-size:11px; opacity:.6;">Your game is right where it was — generating a new link to reconnect…</p>
-    `;
-    addOpts([]);
-    mpDemoTimer = setTimeout(renderReconnectOffer, 900);
-  }
-
-  async function renderReconnectOffer(){
-    mpOnConnectionOpen = ()=>renderReconnected();
-    mpOnConnectionClosed = ()=>renderDisconnected();
-    modal.innerHTML = `<h3>Reconnect</h3><p>Setting up a new connection…</p>`;
-    addOpts([{ label:"Close", onClick: closeModal, secondary:true }]);
-    let offerBlob;
-    try{ offerBlob = await mpCreateHostOffer(); }
-    catch(err){ renderError("Reconnect", "Couldn't start a new connection — try again."); return; }
-    modal.innerHTML = `
-      <h3>Reconnect</h3>
-      <p>Send this new link to your friend to pick back up.</p>
-      <p style="font-size:11px; opacity:.6;">Your game (turn ${state.current}) is unaffected — it'll resume the moment you reconnect.</p>
-      <p id="mpWaitingText" style="margin-top:14px;"></p>
-      <p style="font-size:11px; opacity:.6;">Once they reply, open the link they send back to connect.</p>
-    `;
-    addOpts([
-      { label:"Copy Link", onClick: async (e)=>{
-          const result = await copyMaskedLink(offerLink(offerBlob), "Reconnect to our Duelism game!");
-          e.target.textContent = copyResultLabel(result);
-          setTimeout(()=>{ if(e.target) e.target.textContent = "Copy Link"; }, 1800);
-        } },
-      { label:"Close", onClick: closeModal, secondary:true },
-    ]);
-    startWaitingDots("mpWaitingText", "Waiting for your friend to reconnect");
-  }
-
-  function renderReconnected(){
-    modal.innerHTML = `
-      <h3>Multiplayer</h3>
-      <p style="color:var(--gold); font-size:14px;">✓ Reconnected!</p>
-      <p style="font-size:11px; opacity:.6;">Right where you left off — turn ${state.current}.</p>
+      <p style="color:var(--red); font-size:14px;">Your friend disconnected.</p>
+      <p style="font-size:11px; opacity:.6;">Your game is unaffected — room ${mpRoomCode} is still open, and they can rejoin with the same code any time.</p>
     `;
     addOpts([{ label:"Close", onClick: closeModal, secondary:true }]);
   }
@@ -3298,12 +3202,8 @@ function showMultiplayer(entry){
   wrap.appendChild(modal);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
-  if(entry?.answerCode){
-    renderRelayingAnswer(entry.answerCode);
-  } else if(entry?.connectCode){
-    // Opened via the host's link — the offer is already in hand, so skip straight to generating
-    // and showing the join code instead of making the person click an extra "generate" step.
-    renderReply(entry.connectCode);
+  if(entry?.roomCode){
+    renderJoining(entry.roomCode);
   } else if(mpConnected){
     renderConnected();
   } else {
@@ -3315,16 +3215,12 @@ function showMultiplayer(entry){
 
 document.getElementById("multiplayerBtn").onclick = ()=>showMultiplayer();
 
-// If the page was opened via a shared link, jump straight to the right screen instead of making
-// the person retype anything: "?connect=" is an offer link (friend joining), "?answer=" is a reply
-// link (relayed via BroadcastChannel to whichever tab is still open and hosting — see
-// relayAnswerToHostTab() above).
+// If the page was opened via a shared link (?room=CODE), jump straight into joining that room
+// instead of making the person type the code in by hand.
 (function checkMultiplayerLinkOnLoad(){
   const params = new URLSearchParams(location.search);
-  const connectCode = params.get("connect");
-  const answerCode = params.get("answer");
-  if(connectCode) showMultiplayer({ connectCode });
-  else if(answerCode) showMultiplayer({ answerCode });
+  const roomCode = params.get("room");
+  if(roomCode) showMultiplayer({ roomCode });
 })();
 
 // ---- Save / Load ----------------------------------------------------------------------------
@@ -3468,13 +3364,13 @@ mpOnLoadRequest = function(loaded){
   const accept = document.createElement("button"); accept.textContent = "Accept";
   accept.onclick = ()=>{
     applyLoadedState(loaded); // broadcasts the new state back to them automatically via render()
-    sendMpMessage({ type:"loadResponse", accepted:true });
+    if(mpRoomCode) window.FB.set(window.FB.ref(`rooms/${mpRoomCode}/loadResponse`), { from: mpLocalPlayerNumber, accepted:true }).catch(()=>{});
     root.innerHTML = "";
     resetPeekButton();
   };
   const decline = document.createElement("button"); decline.textContent = "Decline"; decline.className="secondary";
   decline.onclick = ()=>{
-    sendMpMessage({ type:"loadResponse", accepted:false });
+    if(mpRoomCode) window.FB.set(window.FB.ref(`rooms/${mpRoomCode}/loadResponse`), { from: mpLocalPlayerNumber, accepted:false }).catch(()=>{});
     root.innerHTML = "";
     resetPeekButton();
   };
@@ -3627,16 +3523,16 @@ function showSaveLoad(){
       mpOnLoadResponse = null;
       if(mpDotsInterval){ clearInterval(mpDotsInterval); mpDotsInterval = null; }
       if(accepted){
-        // The opponent applies the state on their end and it broadcasts back to us over the data
-        // channel automatically (see render()'s broadcastStateIfChanged hook) — no need to apply it
-        // a second time here, just let the incoming "state" message update the board underneath.
+        // The opponent applies the state on their end and it broadcasts back to us automatically
+        // (see render()'s broadcastStateIfChanged hook) — no need to apply it a second time here,
+        // just let the incoming state update the board underneath.
         modal.innerHTML = `<h3>Save / Load</h3><p style="color:var(--gold); font-size:14px;">✓ Loaded!</p>`;
       } else {
         modal.innerHTML = `<h3>Save / Load</h3><p style="color:var(--red); font-size:14px;">Your opponent declined the request.</p>`;
       }
       addOpts([{ label:"Close", onClick: closeModal, secondary:true }]);
     };
-    sendMpMessage({ type:"loadRequest", code });
+    if(mpRoomCode) window.FB.set(window.FB.ref(`rooms/${mpRoomCode}/loadRequest`), { from: mpLocalPlayerNumber, code }).catch(()=>{});
   }
 
   renderChoice();
