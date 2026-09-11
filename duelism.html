@@ -529,6 +529,11 @@
     off: (r) => off(r),
     onDisconnectSet: (r, val) => onDisconnect(r).set(val),
   };
+  // Fired once window.FB actually exists, so anything that needs Firebase right away (like
+  // auto-joining a room from a shared link) can wait for this instead of racing ahead of this
+  // module script, which loads asynchronously from a CDN and can't guarantee it beats the main
+  // script's very first line of execution.
+  window.dispatchEvent(new Event("firebase-ready"));
 </script>
 
 <script>
@@ -3109,6 +3114,7 @@ function showMultiplayer(entry){
     mpOnConnectionClosed = ()=>renderDisconnected();
     modal.innerHTML = `<h3>Host a New Game</h3><p>Creating your room…</p>`;
     addOpts([{ label:"Close", onClick: closeModal, secondary:true }]);
+    await waitForFirebaseReady();
     if(!window.FB?.ready){
       renderError("Host a New Game", "Couldn't reach the database — check that Firebase is set up correctly.");
       return;
@@ -3164,6 +3170,7 @@ function showMultiplayer(entry){
     mpOnConnectionClosed = ()=>renderDisconnected();
     modal.innerHTML = `<h3>Join Game</h3><p>Joining room ${code}…</p>`;
     addOpts([]);
+    await waitForFirebaseReady();
     if(!window.FB?.ready){
       renderError("Join Game", "Couldn't reach the database — check that Firebase is set up correctly.");
       return;
@@ -3213,10 +3220,29 @@ function showMultiplayer(entry){
   positionModalNextToPeek(wrap);
 }
 
+// Waits for the Firebase module script's "ready" signal before resolving, since that script loads
+// asynchronously from a CDN and isn't guaranteed to have finished by the time this fires — with a
+// timeout fallback so a genuinely broken/unreachable Firebase setup doesn't hang forever.
+function waitForFirebaseReady(timeoutMs=4000){
+  if(window.FB) return Promise.resolve();
+  return new Promise(resolve=>{
+    const timer = setTimeout(()=>{ window.removeEventListener("firebase-ready", onReady); resolve(); }, timeoutMs);
+    function onReady(){
+      clearTimeout(timer);
+      window.removeEventListener("firebase-ready", onReady);
+      resolve();
+    }
+    window.addEventListener("firebase-ready", onReady);
+  });
+}
+
 document.getElementById("multiplayerBtn").onclick = ()=>showMultiplayer();
 
 // If the page was opened via a shared link (?room=CODE), jump straight into joining that room
-// instead of making the person type the code in by hand.
+// instead of making the person type the code in by hand. renderJoining() (called from inside
+// showMultiplayer) waits for Firebase to actually finish loading before attempting the join —
+// this auto-join fires the instant the page loads, which can easily race ahead of the async CDN
+// import, unlike clicking "Host a New Game" by hand after the page has already settled.
 (function checkMultiplayerLinkOnLoad(){
   const params = new URLSearchParams(location.search);
   const roomCode = params.get("room");
