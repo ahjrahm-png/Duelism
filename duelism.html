@@ -1589,7 +1589,8 @@ function undoLastMoveAndReset(){
 let yyLastPlayer = null;
 
 const GLOW_SELECTOR = ".yydot, .tilename, .tileicon img";
-let ambientActiveIdx = null; // index (within GLOW_SELECTOR order) the ambient loop currently owns
+// Set (not a single value) since ambient pulses now deliberately overlap — see scheduleNextAmbientGem().
+let ambientActiveIndices = new Set();
 
 // Smoothly interpolate a letter's color/glow from resting (gold) to fully lit (white) for a given
 // intensity t (0..1) — driven continuously per frame rather than snapping between two CSS states,
@@ -1634,12 +1635,11 @@ function markTurnHandoff(){
 function triggerDefeatGlowPulse(){
   const count = document.querySelectorAll(GLOW_SELECTOR).length;
   if(count===0) return;
-  const skipIdx = ambientActiveIdx;
   const plans = Array.from({length:count}, (_,i)=>{
-    if(i===skipIdx) return null;
+    if(ambientActiveIndices.has(i)) return null;
     const rampUp = 900 + Math.random()*500;
     const hold = 500 + Math.random()*400;
-    const rampDown = 900 + Math.random()*500;
+    const rampDown = rampUp;
     return { startDelay: Math.random()*150, rampUp, hold, rampDown, total: rampUp+hold+rampDown };
   });
   const start = performance.now();
@@ -1981,11 +1981,14 @@ function startAmbientGemGlowLoop(){
   scheduleNextAmbientGem();
 }
 
+// Used only to kick off the very first pulse, and as a retry gap whenever there's nothing to
+// animate yet (animations paused, or no glowable elements) — once pulses are actually running,
+// each one schedules the next by itself (see runAmbientGlowPulse) rather than chaining through here.
 function scheduleNextAmbientGem(){
-  const wait = 1200 + Math.random()*2200; // small pause before the next element picks up
+  const wait = 1200 + Math.random()*2200;
   setTimeout(()=>{
     if(animationLevel>=2){
-      runAmbientGlowPulse(()=> scheduleNextAmbientGem());
+      runAmbientGlowPulse();
     } else {
       scheduleNextAmbientGem(); // keep the schedule alive so it resumes instantly if the level changes
     }
@@ -2024,33 +2027,69 @@ function applyGlowIntensity(el, t){
   // t: 0 = resting, 1 = fully lit — continuously interpolated, same peak look as hover/.glow-active
   const isIcon = el.tagName === "IMG";
   const brightness = 1 + 0.7*t;
-  const blur = 9*t;
   const scale = 1 + 0.12*t;
-  const glowRgb = isIcon ? "255,255,255" : (el.style.getPropertyValue("--gem-glow-rgb") || "255,255,255");
+  if(isIcon){
+    // Icons already have a real, visible glow baked into their own resting CSS (a 6px gold drop-shadow
+    // — see .tileicon img) — unlike gems/dots, which rest completely glow-free. Fading the animated
+    // glow toward *nothing* would overshoot past that resting look, so the very last instant of the
+    // fade had to visibly snap back up to it. Interpolating toward the actual resting blur/opacity/
+    // color instead means the fade lands exactly where the CSS default already sits, with nothing left
+    // to jump. The constant depth-shadow drop-shadow(0 1px 3px rgba(0,0,0,.5)) is carried through the
+    // whole animation too, rather than only reappearing once the animation hands back off to the CSS.
+    if(t<=0){
+      el.style.filter = ""; // exact CSS default — avoids float rounding drift accumulating over many pulses
+    } else {
+      const blur = lerp(6, 9, t);
+      const alpha = lerp(0.45, 0.85, t);
+      const r = Math.round(lerp(216,255,t)), g = Math.round(lerp(178,255,t)), b = Math.round(lerp(92,255,t));
+      el.style.filter = `brightness(${brightness.toFixed(2)}) drop-shadow(0 0 ${blur.toFixed(1)}px rgba(${r},${g},${b},${alpha.toFixed(2)})) drop-shadow(0 1px 3px rgba(0,0,0,.5))`;
+    }
+    el.style.transform = "";
+    return;
+  }
+  // Gems/dots: unchanged — their resting state is already glow-free, so fading toward nothing already
+  // matches the CSS default with no discontinuity to fix.
+  const glowRgb = el.style.getPropertyValue("--gem-glow-rgb") || "255,255,255";
   if(t<=0){
     el.style.filter = "";
-    if(isIcon) el.style.transform = ""; else setComposedScale(el, 1);
+    setComposedScale(el, 1);
   } else {
+    const blur = 9*t;
     el.style.filter = `brightness(${brightness.toFixed(2)}) drop-shadow(0 0 ${blur.toFixed(1)}px rgba(${glowRgb},${(0.85*t).toFixed(2)}))`;
-    if(isIcon) el.style.transform = ""; else setComposedScale(el, scale); // icon images: glow only, no growing
+    setComposedScale(el, scale);
   }
 }
 
-function runAmbientGlowPulse(onDone){
+function runAmbientGlowPulse(){
   const count = document.querySelectorAll(GLOW_SELECTOR).length;
-  if(count===0 || state.winner){ onDone(); return; }
+  if(count===0 || state.winner){ scheduleNextAmbientGem(); return; }
 
-  const idx = Math.floor(Math.random()*count);
-  ambientActiveIdx = idx;
-  const rampUp = 900 + Math.random()*500;    // slow light-up (gems) / total sweep budget (text)
-  const hold = 500 + Math.random()*400;      // stays lit a little longer (gems only)
-  const rampDown = 900 + Math.random()*500;  // slow dim (gems) / total sweep budget (text)
+  // Prefer an element nothing else is currently mid-pulse on, so two overlapping pulses don't
+  // fight over the same gem/word — falls back to picking anything if everything happens to be busy.
+  let idx = Math.floor(Math.random()*count);
+  if(count>1){
+    let attempts = 0;
+    while(ambientActiveIndices.has(idx) && attempts<8){ idx = Math.floor(Math.random()*count); attempts++; }
+  }
+  ambientActiveIndices.add(idx);
+
+  const rampUp = 900 + Math.random()*500;   // slow light-up (gems) / total sweep budget (text)
+  const hold = 500 + Math.random()*400;     // stays lit a little longer (gems only)
+  const rampDown = rampUp * 1.8;            // deliberately longer than ramp-up — see the easing note below
   const total = rampUp + hold + rampDown;
+
+  // Schedules the *next* pulse to begin partway through this one — 25%-75% of its total duration —
+  // instead of waiting for this one to fully finish first. A little overlap instead of strictly
+  // one animation at a time. Scheduling this independently of the frame loop below means the next
+  // pulse starts on schedule even while this one is still actively animating.
+  setTimeout(()=>{
+    if(animationLevel>=2) runAmbientGlowPulse(); else scheduleNextAmbientGem();
+  }, total * (0.25 + Math.random()*0.5));
 
   const els0 = document.querySelectorAll(GLOW_SELECTOR);
   const picked = els0[idx];
 
-  const finish = ()=>{ ambientActiveIdx = null; onDone(); };
+  const finish = ()=>{ ambientActiveIndices.delete(idx); };
 
   if(picked && picked.classList.contains("tilename")){
     // Text doesn't hold at peak brightness — a smooth traveling wave sweeps across the letters,
@@ -2079,7 +2118,15 @@ function runAmbientGlowPulse(onDone){
       let t;
       if(elapsed < rampUp) t = elapsed/rampUp;
       else if(elapsed < rampUp+hold) t = 1;
-      else if(elapsed < total) t = 1 - (elapsed-rampUp-hold)/rampDown;
+      else if(elapsed < total){
+        // Eased (not linear) on the way down: eyes are more sensitive to relative brightness change
+        // in dim light than bright light, so a linear fade reads as if it's rushing right at the end,
+        // even at equal duration to the ramp-up. Squaring the remaining-time fraction spends more of
+        // the fade's actual wall-clock time lingering in the low-brightness tail instead of the bright
+        // start, which is what a "gradual" fade needs to look like rather than just measure like.
+        const progress = (elapsed-rampUp-hold)/rampDown;
+        t = Math.pow(1-progress, 2);
+      }
       else t = 0;
       applyGlowIntensity(el, t);
     }
@@ -2900,13 +2947,35 @@ async function mpLeaveRoom(){
   teardownMpConnection();
 }
 
+// Reconstructs the same per-unit "just moved from here" hint that a local move sets on itself
+// (see tryMove()'s unit._animFrom) but for a state that arrived over the network — that field is
+// deliberately not part of the wire format (it's transient UI info, not real game state), so
+// without this, a remote move would just snap directly to its new position with no glide at all.
+// Relies on state.units always being in the same fixed order (see newGame()/encodeGameState()).
+function applyRemoteMoveAnimationHints(oldUnits, newUnits){
+  if(!oldUnits || !newUnits || oldUnits.length!==newUnits.length) return;
+  for(let i=0;i<newUnits.length;i++){
+    const before = oldUnits[i], after = newUnits[i];
+    if(before && after && (before.r!==after.r || before.c!==after.c)){
+      after._animFrom = { r: before.r, c: before.c };
+    }
+  }
+}
+
 function subscribeToRoom(code){
   mpStateRef = window.FB.ref(`rooms/${code}/state`);
   window.FB.onValue(mpStateRef, (snapshot)=>{
     const code2 = snapshot.val();
     if(!code2 || code2===mpLastSentStateCode) return; // our own write echoing back — ignore
     mpApplyingRemoteState = true;
-    try{ state = decodeGameState(code2); selectedUnit = null; render(); }
+    try{
+      const oldUnits = state?.units;
+      const newState = decodeGameState(code2);
+      applyRemoteMoveAnimationHints(oldUnits, newState.units);
+      state = newState;
+      selectedUnit = null;
+      render();
+    }
     catch(err){ /* malformed/out-of-sync packet — keep local state rather than crash */ }
     mpApplyingRemoteState = false;
   });
