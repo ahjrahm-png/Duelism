@@ -611,7 +611,7 @@ const NAMED_CARDS = [
   { name:"Life", special:false,
     text:"If you can distribute all 4 HP among your pieces (in any combination), you must. If you have a minor VP available afterward, you choose whether to spend it to take another turn. If you can't distribute all 4 HP, you automatically take another turn instead, at no cost." },
   { name:"Good", special:false,
-    text:"Put 4 damage on your opponent's piece with the most HP. If this defeats it, the normal defeat effect is replaced: you always gain a genuine major VP (never wasted as a duplicate), but your opponent chooses which color." },
+    text:"Your opponent puts 4 damage on their piece with the most HP — if their pieces are tied, they choose which one. If this defeats it, the normal defeat effect is replaced: you always gain a genuine major VP (never wasted as a duplicate), but your opponent chooses which color." },
   { name:"Love", special:true,
     text:"", specialText:"Swap positions with your opponent's piece with the same affinity, then resolve on the new space." },
   { name:"Hate", special:false,
@@ -622,7 +622,7 @@ const NAMED_CARDS = [
     text:"If both are currently possible, choose one: gain a minor VP yourself, or your opponent loses a minor VP. If only one is possible, that one happens automatically.",
     specialText:"You cannot move to Law unless you have the least VP, and either your opponent has a minor VP or you do not have one." },
   { name:"Chaos", special:true,
-    text:"Average the HP of two pieces belonging to the same player: the piece that moved here with one of your other two pieces, or your opponent's piece sharing this piece's affinity with one of their other two pieces. If the total splits unevenly, choose which piece gets the extra point. Take another turn.",
+    text:"Average the HP of the piece that moved here with one of your other two pieces. If the total splits unevenly, choose which piece gets the extra point. Take another turn.",
     specialText:"You cannot move to Chaos unless you have no other legal moves." },
 ];
 
@@ -1189,10 +1189,12 @@ function runNamedCard(name, unit){
         }
       };
       if(tied.length>1){
-        askChoice("Good — Choose Target",
-          "Multiple opponent pieces are tied for the most HP. Choose which one takes 4 damage.",
+        // It's the opponent's own pieces taking the damage, so ties among them are the
+        // opponent's call, not the mover's — same "whose pieces, whose choice" pattern as Evil.
+        switchTimer(opp);
+        askChoice("Good — Opponent's Choice", `Player ${opp}, multiple of your pieces are tied for the most HP. Choose which one takes 4 damage.`,
           tied.map(u=>({label:`${cw(u.color)} piece (${u.hp} HP)`, value:u, color:COLOR_HEX[u.color]})),
-          applyGood);
+          (target)=>{ switchTimer(mover); applyGood(target); });
       } else {
         applyGood(tied[0]);
       }
@@ -1332,14 +1334,8 @@ function runNamedCard(name, unit){
     }
     case "Chaos": {
       const myOthers = unitsOf(mover).filter(u=>u!==unit);
-      const oppSame = unitsOf(opp).find(u=>u.color===unit.color);
-      const oppOthers = oppSame ? unitsOf(opp).filter(u=>u!==oppSame) : [];
 
-      const combos = [];
-      myOthers.forEach(o=>combos.push({ a:unit, b:o, side:"yours" }));
-      if(oppSame){
-        oppOthers.forEach(o=>combos.push({ a:oppSame, b:o, side:"opponent" }));
-      }
+      const combos = myOthers.map(o=>({ a:unit, b:o }));
 
       const splitOf = (cmb)=>{
         const sum = cmb.a.hp + cmb.b.hp;
@@ -1348,10 +1344,8 @@ function runNamedCard(name, unit){
 
       const describeCombo = (cmb)=>{
         const { lo, hi } = splitOf(cmb);
-        const whoA = cmb.side==="yours" ? "Your" : "Opponent's";
-        const whoB = cmb.side==="yours" ? "your" : "their";
         const outcome = (lo===hi) ? `both → ${lo} HP` : `splits to ${lo}/${hi} (you'll choose who gets ${hi})`;
-        return `${whoA} ${cw(cmb.a.color)} (${cmb.a.hp} HP) + ${whoB} ${cw(cmb.b.color)} (${cmb.b.hp} HP) → ${outcome}`;
+        return `Your ${cw(cmb.a.color)} (${cmb.a.hp} HP) + your ${cw(cmb.b.color)} (${cmb.b.hp} HP) → ${outcome}`;
       };
 
       const finish = (cmb, aHp, bHp)=>{
@@ -1384,7 +1378,7 @@ function runNamedCard(name, unit){
 
       askChoice(
         "Chaos",
-        "Average the HP of two pieces belonging to the same player: the piece that moved here with one of your other two pieces, or your opponent's piece sharing this affinity with one of their other two pieces.",
+        "Average the HP of the piece that moved here with one of your other two pieces.",
         combos.map(cmb=>({ label: describeCombo(cmb), value: cmb })),
         applyCombo,
         { choiceCells: combos.flatMap(cmb=>[{r:cmb.a.r,c:cmb.a.c},{r:cmb.b.r,c:cmb.b.c}]) }
