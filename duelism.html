@@ -649,9 +649,9 @@
 
   /* ---- Long-press tile info: text box covers the stats bar while held ---- */
   #tipPanel{
-    display:none; position:absolute; left:0; right:0; top:0; min-height:100%; z-index:5;
+    display:none; position:fixed; z-index:5; box-sizing:border-box; overflow:auto;
     padding:12px 16px 20px; background:#2a2f37; border:2px solid var(--gold); border-radius:12px;
-    box-shadow:0 6px 18px rgba(0,0,0,.55); text-align:left; pointer-events:none;
+    box-shadow:0 6px 18px rgba(0,0,0,.55); text-align:left;
   }
   #tipPanel.show{ display:block; }
   #tipPanel .dname{ font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-bottom:5px; }
@@ -689,7 +689,6 @@
     box-shadow:0 -3px 8px rgba(0,0,0,.35);
   }
   #menuPanel{ padding:8px 10px; }
-  #tipPanel{ top:auto; bottom:0; }
   body.peek-on-deck #dockTab{ display:none; }
 
   /* Peek button takes the menu tab's spot while a popup is open */
@@ -712,6 +711,7 @@
   /* Menu buttons live permanently under the stats bar (no drawer). */
   #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ display:flex; }
   #statsDock{ margin:0 0 2px; }
+  .sideBtn.stoneBtn{ height:70px; }
 </style>
 </head>
 <body>
@@ -1989,8 +1989,88 @@ const AMBIENT_LEVEL_SOURCE_INDICES = [
 
 function getLightSources(level){
   const indices = AMBIENT_LEVEL_SOURCE_INDICES[level] || [];
-  return indices.map(i=>AMBIENT_SOURCE_POINTS[i]);
+  return indices.map(i=>{
+    const o = AMBIENT_SOURCE_POINTS[i], d = driftOffsets[i];
+    return driftEnabled ? { r:o.r + d.r, c:o.c + d.c } : o;
+  });
 }
+
+// ---- Drifting Lights (optional, works on top of the Ambient Lighting slider): each selected light
+// point wanders slowly in a loose, swirling, never-quite-repeating path but is pulled back toward
+// its origin, so it stays "at home". Motion is a damped spring toward the origin plus a gentle random
+// push plus a slowly reversing sideways (swirl) force. Offsets are in grid units (1 = one tile).
+let driftEnabled = false;
+const DRIFT_MAX = 0.42;
+const driftOffsets = Array.from({length:5}, ()=>({ r:0, c:0, vr:0, vc:0, ph:Math.random()*6.28 }));
+// Aura sources (one light + one dark per piece color slot) drift with the very same motion.
+const auraDriftW = Array.from({length:3}, ()=>({ r:0, c:0, vr:0, vc:0, ph:Math.random()*6.28 }));
+const auraDriftB = Array.from({length:3}, ()=>({ r:0, c:0, vr:0, vc:0, ph:Math.random()*6.28 }));
+let driftLast = 0;
+function resetDriftVars(){
+  ["auraGlow","auraDark"].forEach(id=>{ const e=document.getElementById(id); if(!e) return;
+    for(let i=0;i<3;i++){ e.style.removeProperty(`--adx-${i}`); e.style.removeProperty(`--ady-${i}`); } });
+  [auraDriftW, auraDriftB].forEach(a=>a.forEach(d=>{ d.r=d.c=d.vr=d.vc=0; }));
+  resetAmbientDriftVars();
+}
+function resetAmbientDriftVars(){
+  const glow = document.querySelector(".candle-glow");
+  if(!glow) return;
+  for(let i=0;i<5;i++){ glow.style.removeProperty(`--drift-x-${i}`); glow.style.removeProperty(`--drift-y-${i}`); }
+}
+function setDriftEnabled(on){
+  driftEnabled = on;
+  if(!on){ driftOffsets.forEach(d=>{ d.r=d.c=d.vr=d.vc=0; }); resetDriftVars(); }
+  driftLast = 0;
+  render();
+}
+function driftStep(d, t, dt){
+  const K = 0.7, DAMP = 0.8, NOISE = 5, SWIRL = 0.9;
+  const swirlDir = Math.sin(t*0.13 + d.ph);             // slowly flips between clockwise / counter-clockwise
+  const ar = -K*d.r + SWIRL*swirlDir*d.c + NOISE*(Math.random()-0.5) - DAMP*d.vr;
+  const ac = -K*d.c - SWIRL*swirlDir*d.r + NOISE*(Math.random()-0.5) - DAMP*d.vc;
+  d.vr += ar*dt; d.vc += ac*dt;
+  d.r += d.vr*dt; d.c += d.vc*dt;
+  const m = Math.hypot(d.r, d.c);
+  if(m > DRIFT_MAX){ d.r *= DRIFT_MAX/m; d.c *= DRIFT_MAX/m; d.vr *= 0.5; d.vc *= 0.5; }
+}
+function driftFrame(now){
+  requestAnimationFrame(driftFrame);
+  const ambientOn = ambientLightingEnabled && !polarLightingEnabled;
+  if(!driftEnabled || !(ambientOn || polarLightingEnabled) || animationLevel<1){ driftLast = 0; return; }
+  if(!driftLast){ driftLast = now; return; }
+  const dt = Math.min(0.05, (now - driftLast)/1000); driftLast = now;
+  const t = now/1000;
+  const glow = document.querySelector(".candle-glow");
+  if(ambientOn && glow){
+    for(let i=0;i<5;i++){
+      const d = driftOffsets[i]; driftStep(d, t, dt);
+      glow.style.setProperty(`--drift-x-${i}`, (d.c*25).toFixed(3)+"%");
+      glow.style.setProperty(`--drift-y-${i}`, (d.r*25).toFixed(3)+"%");
+    }
+  }
+  if(polarLightingEnabled){
+    [["auraGlow",auraDriftW],["auraDark",auraDriftB]].forEach(([id,arr])=>{
+      const el = document.getElementById(id); if(!el) return;
+      arr.forEach((d,i)=>{
+        driftStep(d, t, dt);
+        el.style.setProperty(`--adx-${i}`, (d.c*25).toFixed(3)+"%");
+        el.style.setProperty(`--ady-${i}`, (d.r*25).toFixed(3)+"%");
+      });
+    });
+  }
+}
+requestAnimationFrame(driftFrame);
+// Pieces pick up the moving light at a gentle pace so their brightness doesn't lag behind the glow
+// (skipped while a move animation owns their lighting).
+setInterval(()=>{
+  if(!driftEnabled || animationLevel<1 || !(ambientLightingEnabled || polarLightingEnabled)) return;
+  document.querySelectorAll("#board .piece").forEach(el=>{
+    if(el.style.transform && el.style.transform !== "none") return;
+    const cell = el.closest(".cell"); if(!cell) return;
+    const idx = Array.prototype.indexOf.call(cell.parentNode.children, cell);
+    el.style.setProperty("--ambient-light", getAmbientLight(Math.floor(idx/4), idx%4).toFixed(3));
+  });
+}, 200);
 
 // ---- Auras: white pieces (P1) act as light sources, black pieces (P2) act as the opposite —
 // darkness sources. Reuses the exact same visual technique and intensity as the dynamic ambient
@@ -2019,7 +2099,12 @@ function getAuraPointLight(r, c){
   const maxDist = Math.hypot(1.5, 1.5);
   let nearestWhite = Infinity, nearestBlack = Infinity;
   state.units.forEach(u=>{
-    const d = Math.hypot(u.r-r, u.c-c);
+    let ur = u.r, uc = u.c;
+    if(driftEnabled){
+      const o = (u.player===1 ? auraDriftW : auraDriftB)[AURA_COLOR_SLOT[u.color]];
+      if(o){ ur += o.r; uc += o.c; }
+    }
+    const d = Math.hypot(ur-r, uc-c);
     if(u.player===1 && d<nearestWhite) nearestWhite = d;
     if(u.player===2 && d<nearestBlack) nearestBlack = d;
   });
@@ -2098,7 +2183,7 @@ const AURA_DARK_PEAK = 0.29 * AURA_INTENSITY_SCALE;
 const AURA_DARK_MID  = 0.17 * AURA_INTENSITY_SCALE;
 
 function buildAuraLayers(units, varPrefix, rgb, peak, mid){
-  const core = (cx,cy,idx)=>`radial-gradient(circle at ${cx}% ${cy}%,
+  const core = (cx,cy,idx)=>`radial-gradient(circle at calc(${cx}% + var(--adx-${idx},0%)) calc(${cy}% + var(--ady-${idx},0%)),
     rgba(${rgb},calc(${peak}*var(--${varPrefix}-${idx},1))) 0%,
     rgba(${rgb},calc(${mid}*var(--${varPrefix}-${idx},1))) 16%,
     rgba(${rgb},0) 40%)`;
@@ -2126,7 +2211,7 @@ function applyAuraGlow(){
 }
 
 function buildGlowBackground(level){
-  const core = (cx,cy,peak,mid,endPct,idx)=>`radial-gradient(circle at ${cx}% ${cy}%,
+  const core = (cx,cy,peak,mid,endPct,idx)=>`radial-gradient(circle at ${cx} ${cy},
     rgba(255,236,215,calc(${peak}*var(--candle-flicker-${idx},1))) 0%,
     rgba(255,236,215,calc(${mid}*var(--candle-flicker-${idx},1))) 16%,
     rgba(255,236,215,0) ${endPct}%)`;
@@ -2135,7 +2220,9 @@ function buildGlowBackground(level){
   const scale = AMBIENT_LEVEL_INTENSITY_SCALE[level] ?? 1;
   const positions = [[50,50], [25,25],[75,25],[25,75],[75,75]];
   const layers = indices.map(idx=>{
-    const [cx,cy] = positions[idx];
+    const [px,py] = positions[idx];
+    // Drifting Lights nudges each source around its origin through these per-source CSS vars (0% when off).
+    const cx = `calc(${px}% + var(--drift-x-${idx},0%))`, cy = `calc(${py}% + var(--drift-y-${idx},0%))`;
     return idx===0
       ? core(cx,cy,0.37*scale,0.22*scale,40,idx)
       : core(cx,cy,0.29*scale,0.17*scale,24,idx);
@@ -3164,6 +3251,9 @@ function showSettings(){
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
         <input type="checkbox" id="polarToggle" ${polarLightingEnabled ? "checked":""}> Auras
       </label>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:-8px;">
+        <input type="checkbox" id="driftToggle" ${driftEnabled ? "checked":""}> Drifting Lights
+      </label>
       <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
         <span>Animation</span>
         <span class="ambient-level-label" id="animLevelLabel">${animLabels[animationLevel]}</span>
@@ -3186,6 +3276,7 @@ function showSettings(){
 
   document.getElementById("ambientSlider").oninput = (e)=> applyAmbientLevel(Number(e.target.value));
   document.getElementById("polarToggle").onchange = (e)=> setAurasEnabled(e.target.checked);
+  document.getElementById("driftToggle").onchange = (e)=> setDriftEnabled(e.target.checked);
   document.getElementById("animSlider").oninput = (e)=>{
     animationLevel = Number(e.target.value);
     document.getElementById("animLevelLabel").textContent = animLabels[animationLevel];
@@ -4163,52 +4254,73 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     dock.appendChild(group);
   })();
 
-  // Tile info on touch: long-press only (a tap just selects/moves). The text appears in a box that
-  // covers the stats bar while the finger is held down, and disappears on release.
+  // Tile info on touch: tap a space. The text appears in a box that
+  // covers the four menu buttons and stays until the same space is tapped again or another one is.
   (function(){
     if(!IS_TOUCH_UI) return;
     const dock = document.getElementById("statsDock");
     const board = document.getElementById("board");
     if(!dock || !board) return;
-    const panel = document.createElement("div"); panel.id = "tipPanel"; dock.appendChild(panel);
-    let suppressUntil = 0, active = null;
+    const panel = document.createElement("div"); panel.id = "tipPanel"; document.body.appendChild(panel);
+    let suppressUntil = 0, active = null, shownHtml = null;
 
-    function release(){
-      if(!active) return;
-      active.cell.classList.remove("lp-active");
-      panel.classList.remove("show");
-      active = null;
-      suppressUntil = Date.now() + 450;      // swallow the click that follows a long-press
+    // Covers the four menu buttons (union of their rects).
+    function placePanel(){
+      const ids = ["newGameBtn","optionsBtn","multiplayerBtn","saveLoadBtn"];
+      let l=1e9,t=1e9,r=0,bt=0;
+      ids.forEach(id=>{ const e=document.getElementById(id); if(!e) return; const q=e.getBoundingClientRect();
+        l=Math.min(l,q.left); t=Math.min(t,q.top); r=Math.max(r,q.right); bt=Math.max(bt,q.bottom); });
+      panel.style.left=l+"px"; panel.style.top=t+"px"; panel.style.width=(r-l)+"px"; panel.style.height=(bt-t)+"px";
     }
-    document.addEventListener("pointerup", release, true);
-    document.addEventListener("pointercancel", release, true);
+    function hidePanel(){
+      panel.classList.remove("show"); shownHtml = null;
+      document.querySelectorAll(".cell.lp-active").forEach(c=>c.classList.remove("lp-active"));
+    }
+    panel.addEventListener("click", hidePanel);          // tapping the box itself also dismisses it
+    window.addEventListener("resize", ()=>{ if(shownHtml) placePanel(); });
+    window.addEventListener("orientationchange", ()=>setTimeout(()=>{ if(shownHtml) placePanel(); }, 300));
 
-    // A long-press must not also select a piece / move.
-    board.addEventListener("click", e=>{
-      if(Date.now() < suppressUntil){ e.stopPropagation(); e.preventDefault(); }
-    }, true);
-    board.addEventListener("contextmenu", e=>e.preventDefault());
+    // Tap a space: its info appears over the menu buttons (and the tap still selects / moves as normal).
+    // Tap the same space again: info goes away (a tapped piece is also deselected by its own handler).
+    // Tap a different space: info switches.
+    const idxOf = cell => Array.prototype.indexOf.call(board.children, cell);
+    let shownIdx = -1;
+    function showFor(cell, html){
+      const idx = idxOf(cell);
+      if(shownHtml === html && shownIdx === idx){ hidePanel(); shownIdx = -1; return; }
+      document.querySelectorAll(".cell.lp-active").forEach(c=>c.classList.remove("lp-active"));
+      panel.innerHTML = html; shownHtml = html; shownIdx = idx;
+      placePanel();
+      panel.classList.add("show");
+      cell.classList.add("lp-active");
+    }
+    // The board is redrawn after every tap: keep the highlight on the same space, or drop the info if the tile changed.
+    const origRenderBoard = window.renderBoard;
+    window.renderBoard = function(){
+      const r = origRenderBoard.apply(this, arguments);
+      if(shownHtml){
+        const c = board.children[shownIdx];
+        if(c && c.dataset.tip === shownHtml) c.classList.add("lp-active");
+        else { hidePanel(); shownIdx = -1; }
+      }
+      return r;
+    };
 
-    const origAttachTooltip = window.attachTooltip;
     window.attachTooltip = function(cell, html){
-      let timer = null, sx = 0, sy = 0;
+      cell.dataset.tip = html;
+      let sx = 0, sy = 0, t0 = 0, down = false;
       cell.addEventListener("pointerdown", e=>{
         if(e.pointerType === "mouse") return;
-        sx = e.clientX; sy = e.clientY;
-        clearTimeout(timer);
-        timer = setTimeout(()=>{
-          timer = null;
-          panel.innerHTML = html;
-          panel.classList.add("show");
-          cell.classList.add("lp-active");
-          active = { cell };
-          if(navigator.vibrate) try{ navigator.vibrate(12); }catch(_){}
-        }, 450);
+        sx = e.clientX; sy = e.clientY; t0 = Date.now(); down = true;
       });
-      cell.addEventListener("pointermove", e=>{
-        if(timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10){ clearTimeout(timer); timer = null; }
+      cell.addEventListener("pointercancel", ()=>{ down = false; });
+      cell.addEventListener("pointerup", e=>{
+        if(e.pointerType === "mouse" || !down) return;
+        down = false;
+        if(Math.hypot(e.clientX - sx, e.clientY - sy) > 10 || Date.now() - t0 > 600) return;
+        showFor(cell, html);
       });
-      ["pointerup","pointercancel"].forEach(ev=>cell.addEventListener(ev, ()=>{ clearTimeout(timer); timer = null; }));
+      cell.addEventListener("contextmenu", e=>e.preventDefault());
     };
     // Cells drawn before this override existed still have the old hover handlers: redraw once.
     try{ renderBoard(); }catch(_){}
