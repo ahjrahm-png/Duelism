@@ -709,6 +709,9 @@
   #scaleWrap{ flex:0 0 auto; display:block; }
   .table{ flex:none; grid-template-rows:none; }
   #statsDock{ align-self:auto; margin:30px 0 0; }
+  /* Menu buttons live permanently under the stats bar (no drawer). */
+  #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ display:flex; }
+  #statsDock{ margin:0 0 2px; }
 </style>
 </head>
 <body>
@@ -1722,6 +1725,30 @@ function showNotice(title, desc, onOk){
   const okBtn = document.createElement("button"); okBtn.textContent="OK";
   okBtn.onclick = ()=>{ root.innerHTML=""; clearPeekHighlights(); resetPeekButton(); onOk(); render(); };
   row.appendChild(okBtn);
+  modal.appendChild(row);
+  wrap.appendChild(modal);
+  attachPeekButton(overlay, wrap, [], {});
+  positionModalNextToPeek(wrap);
+  overlay.appendChild(wrap);
+  root.appendChild(overlay);
+}
+
+function confirmNewGame(){
+  if(typeof state!=="undefined" && state && state.winner){ newGame(); return; }
+  hideTooltip();
+  clearPeekHighlights();
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = "";
+  const overlay = document.createElement("div"); overlay.className="overlay";
+  const wrap = document.createElement("div"); wrap.className="modal-wrap";
+  const modal = document.createElement("div"); modal.className="modal";
+  modal.innerHTML = `<h3>New Game</h3><p>Are you sure you want to end your current game and start a new one?</p>`;
+  const row = document.createElement("div"); row.className="opts";
+  const yes = document.createElement("button"); yes.textContent="Yes, start new game";
+  yes.onclick = ()=>{ root.innerHTML=""; resetPeekButton(); newGame(); };
+  const no = document.createElement("button"); no.className="secondary"; no.textContent="Cancel";
+  no.onclick = ()=>{ root.innerHTML=""; resetPeekButton(); };
+  row.appendChild(yes); row.appendChild(no);
   modal.appendChild(row);
   wrap.appendChild(modal);
   attachPeekButton(overlay, wrap, [], {});
@@ -4006,7 +4033,7 @@ function showRules(){
 
 /* ============================= INIT ============================= */
 
-document.getElementById("newGameBtn").onclick = newGame;
+document.getElementById("newGameBtn").onclick = confirmNewGame;
 document.getElementById("optionsBtn").onclick = showOptions;
 document.getElementById("board").addEventListener("mouseleave", ()=>{ /* keep selection until click elsewhere */ });
 
@@ -4126,24 +4153,14 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
   document.addEventListener("touchstart", ()=>tip.classList.remove("show"), { passive:true });
 
 
-  // Tuck the four menu buttons behind a tab at the bottom of the stats bar.
+  // Stats bar gets a small wrapper (the peek button and long-press info box anchor to it);
+  // the four menu buttons stay visible in a row of their own right below it.
   (function(){
     const group = document.querySelector(".tray-group");
     if(!group) return;
     const dock = document.createElement("div"); dock.id = "statsDock";
     group.parentNode.insertBefore(dock, group);
     dock.appendChild(group);
-    const panel = document.createElement("div"); panel.id = "menuPanel";
-    ["newGameBtn","optionsBtn","multiplayerBtn","saveLoadBtn"].forEach(id=>{
-      const b = document.getElementById(id);
-      if(b){ panel.appendChild(b); b.addEventListener("click", ()=>setTimeout(()=>setOpen(false), 0)); }
-    });
-    dock.appendChild(panel);
-    const tab = document.createElement("button"); tab.id = "dockTab"; tab.type = "button";
-    tab.setAttribute("aria-label", "Menu"); tab.innerHTML = '<span class="chev">▴</span>';
-    dock.appendChild(tab);
-    function setOpen(o){ panel.classList.toggle("open", o); tab.classList.toggle("open", o); }
-    tab.addEventListener("click", ()=>setOpen(!panel.classList.contains("open")));
   })();
 
   // Tile info on touch: long-press only (a tap just selects/moves). The text appears in a box that
