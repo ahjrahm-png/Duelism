@@ -1751,7 +1751,6 @@ function confirmNewGame(){
   row.appendChild(yes); row.appendChild(no);
   modal.appendChild(row);
   wrap.appendChild(modal);
-  attachPeekButton(overlay, wrap, [], {});
   positionModalNextToPeek(wrap);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
@@ -1774,7 +1773,6 @@ function showWinModal(player){
   row.appendChild(newGameBtn); row.appendChild(closeBtn);
   modal.appendChild(row);
   wrap.appendChild(modal);
-  attachPeekButton(overlay, wrap, [], {});
   positionModalNextToPeek(wrap);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
@@ -3679,7 +3677,6 @@ function showMultiplayer(entry){
   } else {
     renderStart();
   }
-  attachPeekButton(overlay, wrap, [], {});
   positionModalNextToPeek(wrap);
 }
 
@@ -3868,7 +3865,6 @@ mpOnLoadRequest = function(loaded){
   wrap.appendChild(modal);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
-  attachPeekButton(overlay, wrap, [], {});
   positionModalNextToPeek(wrap);
 };
 
@@ -4028,7 +4024,6 @@ function showSaveLoad(){
   wrap.appendChild(modal);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
-  attachPeekButton(overlay, wrap, [], {});
   positionModalNextToPeek(wrap);
 }
 
