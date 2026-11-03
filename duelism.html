@@ -660,7 +660,7 @@
   #tipPanel .dmini{ display:flex; gap:6px; align-items:center; font-size:12.5px; color:var(--ink); margin-top:5px; }
   #tipPanel .chip{ width:10px; height:10px; border-radius:50%; display:inline-block; flex:0 0 auto; }
   .cell.lp-active{ box-shadow:0 0 0 2px var(--gold) inset, 0 0 14px 2px rgba(216,178,92,.6); z-index:2; }
-  @media (hover:none){ #tooltip{ display:none !important; } }
+  #tooltip{ display:none !important; }
   .overlay.peeking .modal-wrap{ pointer-events:none; }
   .peek-anchor.on{ background:var(--gold); color:#141018; border-color:var(--gold); box-shadow:0 0 14px rgba(216,178,92,.7); }
 
@@ -4132,6 +4132,9 @@ newGame();
 startAmbientGemGlowLoop();
 startCandleFlickerLoop();
 applyAmbientLevel(0);
+// Defaults: Auras and Drifting Lights start on.
+driftEnabled = true;
+setAurasEnabled(true);
 
 // #scaleWrap is visually scaled to 90% (see CSS) but a CSS transform doesn't shrink an element's
 // contribution to page/scroll height — without this, the page would still reserve full-size space
@@ -4257,7 +4260,6 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
   // Tile info on touch: tap a space. The text appears in a box that
   // covers the four menu buttons and stays until the same space is tapped again or another one is.
   (function(){
-    if(!IS_TOUCH_UI) return;
     const dock = document.getElementById("statsDock");
     const board = document.getElementById("board");
     if(!dock || !board) return;
@@ -4310,12 +4312,11 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       cell.dataset.tip = html;
       let sx = 0, sy = 0, t0 = 0, down = false;
       cell.addEventListener("pointerdown", e=>{
-        if(e.pointerType === "mouse") return;
         sx = e.clientX; sy = e.clientY; t0 = Date.now(); down = true;
       });
       cell.addEventListener("pointercancel", ()=>{ down = false; });
       cell.addEventListener("pointerup", e=>{
-        if(e.pointerType === "mouse" || !down) return;
+        if(!down) return;
         down = false;
         if(Math.hypot(e.clientX - sx, e.clientY - sy) > 10 || Date.now() - t0 > 600) return;
         showFor(cell, html);
