@@ -182,13 +182,27 @@
     content:""; position:absolute; inset:0; background-image:var(--tile-img); background-size:cover;
     background-position:center; border-radius:5px; z-index:0; pointer-events:none;
   }
+  /* The tile art has a dark margin on some sides (varies by tile position), so the highlight layer
+     (::after) is inset to the visible stone only: --st-t/r/b/l are measured from each tile image. */
+  .cell{ --st-t:0%; --st-r:0%; --st-b:2.5%; --st-l:0%; }
+  .cell.pos-corner-tl{ --st-t:3.5%; --st-r:0%;   --st-b:0%;   --st-l:5%; }
+  .cell.pos-edge-top{  --st-t:3.5%; --st-r:0%;   --st-b:0%;   --st-l:0%; }
+  .cell.pos-corner-tr{ --st-t:3.5%; --st-r:5%;   --st-b:0%;   --st-l:0%; }
+  .cell.pos-edge-left{ --st-t:0%;   --st-r:0%;   --st-b:2.5%; --st-l:5%; }
+  .cell.pos-edge-right{--st-t:0%;   --st-r:5%;   --st-b:2.5%; --st-l:0%; }
+  .cell.pos-corner-bl{ --st-t:0%;   --st-r:0%;   --st-b:5.5%; --st-l:4%; }
+  .cell.pos-edge-bottom{--st-t:0%;  --st-r:0%;   --st-b:6%;   --st-l:0%; }
+  .cell.pos-corner-br{ --st-t:0%;   --st-r:4%;   --st-b:5.5%; --st-l:0%; }
   .cell::after{
-    content:""; position:absolute; inset:0; border-radius:5px; z-index:0; pointer-events:none;
-    background:rgba(216,178,92,.24); opacity:0; transition:opacity .15s ease;
+    content:""; position:absolute; inset:var(--st-t) var(--st-r) var(--st-b) var(--st-l); border-radius:6px; z-index:0; pointer-events:none;
+    background:transparent; opacity:0; transition:opacity .15s ease;
   }
-  .cell.legal::after{ opacity:1; }
-  .cell.legal{ box-shadow:0 0 0 2px var(--gold) inset; cursor:pointer; }
-  .cell.selected{ box-shadow:0 0 0 2px #fff inset; }
+  .cell.selected::after{ opacity:1; box-shadow:inset 0 0 0 2px #fff; }
+  .cell.lp-active::after{ opacity:1; box-shadow:inset 0 0 0 2px var(--gold), 0 0 14px 2px rgba(216,178,92,.6); }
+  .cell.legal::after{ opacity:1; background:rgba(216,178,92,.24); }
+  .cell.legal{ cursor:pointer; }
+  .cell.legal.pending{ z-index:2; }
+  .cell.legal.pending::after{ box-shadow:inset 0 0 0 3px var(--gold), 0 0 16px 3px rgba(216,178,92,.65); }
 
   /* ---- Named (text) tile face ---- */
   .tileface{
@@ -446,9 +460,9 @@
   .peek-anchor.active .eye-icon{ transform: rotate(-180deg); }
   .peek-anchor.active:hover{ transform: translateY(-50%) translateX(-50%) rotate(180deg) scale(1.1); }
 
-  .cell.peek-impact{ box-shadow:0 0 0 3px var(--red) inset, 0 0 16px 3px rgba(226,85,74,.75) !important; z-index:10; }
-  .cell.peek-choice{ box-shadow:0 0 0 3px var(--gold) inset, 0 0 16px 3px rgba(216,178,92,.7) !important; z-index:10; }
-  .cell.peek-dest{ box-shadow:0 0 0 3px var(--blue) inset, 0 0 16px 3px rgba(79,143,224,.7) !important; z-index:10; }
+  .cell.peek-impact{ z-index:10; } .cell.peek-impact::after{ opacity:1 !important; box-shadow:inset 0 0 0 3px var(--red), 0 0 16px 3px rgba(226,85,74,.75) !important; }
+  .cell.peek-choice{ z-index:10; } .cell.peek-choice::after{ opacity:1 !important; box-shadow:inset 0 0 0 3px var(--gold), 0 0 16px 3px rgba(216,178,92,.7) !important; }
+  .cell.peek-dest{ z-index:10; } .cell.peek-dest::after{ opacity:1 !important; box-shadow:inset 0 0 0 3px var(--blue), 0 0 16px 3px rgba(79,143,224,.7) !important; }
 
   /* ================= MOBILE LAYOUT ================= */
   html{ -webkit-text-size-adjust:100%; }
@@ -659,7 +673,7 @@
   #tipPanel .dspecial{ font-size:11.5px; line-height:1.35; color:var(--dim); font-style:italic; margin-top:5px; }
   #tipPanel .dmini{ display:flex; gap:6px; align-items:center; font-size:12.5px; color:var(--ink); margin-top:5px; }
   #tipPanel .chip{ width:10px; height:10px; border-radius:50%; display:inline-block; flex:0 0 auto; }
-  .cell.lp-active{ box-shadow:0 0 0 2px var(--gold) inset, 0 0 14px 2px rgba(216,178,92,.6); z-index:2; }
+  .cell.lp-active{ z-index:2; }
   #tooltip{ display:none !important; }
   .overlay.peeking .modal-wrap{ pointer-events:none; }
   .peek-anchor.on{ background:var(--gold); color:#141018; border-color:var(--gold); box-shadow:0 0 14px rgba(216,178,92,.7); }
@@ -1253,6 +1267,7 @@ function totalVP(player){
 /* ============================= TURN / EFFECT ENGINE ============================= */
 
 let selectedUnit = null;
+let pendingDest = null; // mobile: first tap on a legal space previews it (outlined), second tap on the same space commits
 let pendingExtraTurn = false;
 
 function startTurnLoop(){
@@ -2813,6 +2828,7 @@ function renderBoard(){
   const board = document.getElementById("board");
   board.innerHTML = "";
   const legalCells = selectedUnit ? legalMovesFor(selectedUnit) : [];
+  if(pendingDest && !legalCells.some(m=>m.r===pendingDest.r && m.c===pendingDest.c)) pendingDest = null;
 
   for(let r=0;r<4;r++){
     for(let c=0;c<4;c++){
@@ -2901,8 +2917,15 @@ function renderBoard(){
       const isLegal = legalCells.some(m=>m.r===r && m.c===c);
       if(isLegal){
         cell.classList.add("legal");
+        if(pendingDest && pendingDest.r===r && pendingDest.c===c) cell.classList.add("pending");
         cell.onclick = ()=>{
           if(!isMyTurnOrLocal()) return;
+          if(!(pendingDest && pendingDest.r===r && pendingDest.c===c)){
+            pendingDest = { r, c };          // first tap: preview + outline this space, don't move yet
+            renderBoard();
+            return;
+          }
+          pendingDest = null;
           preMoveSnapshot = JSON.stringify(state);
           const u = selectedUnit;
           selectedUnit = null;
@@ -4127,9 +4150,6 @@ newGame();
 startAmbientGemGlowLoop();
 startCandleFlickerLoop();
 applyAmbientLevel(0);
-// Defaults: Auras and Drifting Lights start on.
-driftEnabled = true;
-setAurasEnabled(true);
 
 // #scaleWrap is visually scaled to 90% (see CSS) but a CSS transform doesn't shrink an element's
 // contribution to page/scroll height — without this, the page would still reserve full-size space
@@ -4213,7 +4233,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       peeking = on;
       overlay.classList.toggle("peeking", on);
       peekBtn.classList.toggle("on", on);
-      if(on) applyPeekHighlights(impactCells, choiceCells, destCells); else clearPeekHighlights();
+      applyPeekHighlights(impactCells, choiceCells, destCells);   // markers stay on whether the popup is up or peeked away
     };
     // Tap to toggle: the finger can lift and the board stays visible until the tab is tapped again.
     const onTap = (e)=>{ if(e && e.cancelable) e.preventDefault(); setPeek(!peeking); };
@@ -4221,6 +4241,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     peekBtn.addEventListener("contextmenu", e=>e.preventDefault());
     peekBtn.classList.add("active");
     document.body.classList.add("peek-on-deck");
+    applyPeekHighlights(impactCells, choiceCells, destCells);   // show impacted / choosable spaces right away
     positionPeekButton();
     peekBtn._cleanup = ()=>{
       peekBtn.removeEventListener("click", onTap);
