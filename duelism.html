@@ -472,7 +472,7 @@
             max(10px,env(safe-area-inset-bottom)) max(4px,env(safe-area-inset-left));
   }
   .table{
-    display:grid; grid-template-columns:1fr 1fr; column-gap:8px; row-gap:8px;
+    display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:8px; row-gap:8px;
     width:100%; max-width:560px; margin:0 auto; align-items:start; justify-items:stretch;
   }
   /* Flatten the desktop side column so its pieces can be re-ordered around the board. */
@@ -725,7 +725,8 @@
   /* Menu buttons live permanently under the stats bar (no drawer). */
   #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ display:flex; }
   #statsDock{ margin:0 0 2px; }
-  .sideBtn.stoneBtn{ height:70px; }
+  .sideBtn.stoneBtn{ height:70px; min-width:0; }
+  #multiplayerBtn{ white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -754,7 +755,7 @@
       <div class="tray" id="trayP1"><h2>Player 1</h2></div>
       <div class="tray" id="trayP2"><h2>Player 2</h2></div>
     </div>
-    <button class="stoneBtn sideBtn" id="multiplayerBtn" style="margin-top:16px;">Host a New Game</button>
+    <button class="stoneBtn sideBtn" id="multiplayerBtn" style="margin-top:16px;">Host / Join</button>
     <button class="stoneBtn sideBtn" id="saveLoadBtn" style="margin-top:8px;">Save / Load</button>
   </div>
 </div>
@@ -3320,6 +3321,7 @@ let mpLastSentStateCode = null;
 let mpConnected = false; // derived from the other player's presence flag in the room
 let mpStateRef = null;
 let mpPresenceRef = null;
+let mpConnInfoRef = null;   // Firebase's own ".info/connected" flag — flips whenever this browser's link to the server drops/returns
 let mpLoadRequestRef = null;
 let mpLoadResponseRef = null;
 let mpOnConnectionOpen = null;   // callback(playerNumber) — set by whichever screen is showing
@@ -3345,6 +3347,8 @@ function teardownMpConnection(){
   if(mpPresenceRef) window.FB.off(mpPresenceRef);
   if(mpLoadRequestRef) window.FB.off(mpLoadRequestRef);
   if(mpLoadResponseRef) window.FB.off(mpLoadResponseRef);
+  if(mpConnInfoRef) window.FB.off(mpConnInfoRef);
+  mpConnInfoRef = null;
   mpStateRef = mpPresenceRef = mpLoadRequestRef = mpLoadResponseRef = null;
   mpRoomCode = null;
   mpLocalPlayerNumber = null;
@@ -3377,7 +3381,27 @@ function applyRemoteMoveAnimationHints(oldUnits, newUnits){
   }
 }
 
+// Presence has to be re-announced every time the connection comes back. A phone that backgrounds the
+// page (e.g. to send the invite link in a messaging app) loses its server connection, Firebase then runs
+// the one-shot onDisconnect handler and marks this player absent — and nothing ever marked them present
+// again when the page returned, so the other side saw "your friend disconnected" and (worse) stopped
+// sending moves. Re-arming onDisconnect and setting the flag back to true on every reconnect fixes that.
+async function mpAnnouncePresence(){
+  if(!mpRoomCode || !mpLocalPlayerNumber || !window.FB?.ready) return;
+  const field = mpLocalPlayerNumber===1 ? "hostPresent" : "guestPresent";
+  const ref = window.FB.ref(`rooms/${mpRoomCode}/${field}`);
+  try{
+    await window.FB.onDisconnectSet(ref, false);
+    await window.FB.set(ref, true);
+  }catch(err){}
+}
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") mpAnnouncePresence(); });
+window.addEventListener("online", ()=>mpAnnouncePresence());
+window.addEventListener("pageshow", ()=>mpAnnouncePresence());
+
 function subscribeToRoom(code){
+  mpConnInfoRef = window.FB.ref(".info/connected");
+  window.FB.onValue(mpConnInfoRef, (snap)=>{ if(snap.val()===true) mpAnnouncePresence(); });
   mpStateRef = window.FB.ref(`rooms/${code}/state`);
   window.FB.onValue(mpStateRef, (snapshot)=>{
     const code2 = snapshot.val();
@@ -3469,7 +3493,9 @@ async function mpJoinRoom(rawCode){
 // Called from render() itself — see the guard against re-broadcasting a state we just received,
 // and the dedup against unchanged state so this stays cheap regardless of how often render() runs.
 function broadcastStateIfChanged(){
-  if(!mpConnected || !mpRoomCode || mpApplyingRemoteState || !window.FB?.ready) return;
+  // Sends whenever we're in a room — not gated on the other player's presence flag, which can lag or
+  // flicker, and used to silently swallow this player's moves when it did.
+  if(!mpRoomCode || mpApplyingRemoteState || !window.FB?.ready) return;
   const code = encodeGameState();
   if(code===mpLastSentStateCode) return;
   mpLastSentStateCode = code;
@@ -3593,6 +3619,21 @@ function showMultiplayer(entry){
     ]);
   }
 
+  // First screen: pick whether to start a room or enter a friend's code (no room is created until Host is chosen).
+  function renderChoice(){
+    mpOnConnectionOpen = ()=>renderConnected();
+    mpOnConnectionClosed = ()=>renderDisconnected();
+    modal.innerHTML = `
+      <h3>Host/Join a New Game</h3>
+      <p>Start a new room and send your friend the link or code — or join theirs by entering their 5-character code.</p>
+    `;
+    addOpts([
+      { label:"Host a New Game", onClick: ()=>renderStart() },
+      { label:"Join with a Code", onClick: ()=>renderJoinInput() },
+      { label:"Close", onClick: closeModal, secondary:true },
+    ]);
+  }
+
   async function renderStart(){
     mpOnConnectionOpen = ()=>renderConnected();
     mpOnConnectionClosed = ()=>renderDisconnected();
@@ -3628,7 +3669,7 @@ function showMultiplayer(entry){
   function renderJoinInput(prefillCode){
     modal.innerHTML = `
       <h3>Join Game</h3>
-      <p>Enter the code — or open the link — your friend sent you.</p>
+      <p>Enter the 5-character code your friend gave you, then tap Join.</p>
       <input id="mpCodeInput" maxlength="5" placeholder="XXXXX" style="
         width:100%; box-sizing:border-box; text-align:center; font-size:22px; letter-spacing:.3em;
         text-transform:uppercase; padding:12px; margin:8px 0; border-radius:8px; outline:none;
@@ -3642,11 +3683,13 @@ function showMultiplayer(entry){
           if(val.length<5) return;
           renderJoining(val);
         } },
-      { label:"Back", onClick: ()=>backTo(renderStart), secondary:true },
+      { label:"Back", onClick: ()=>backTo(renderChoice), secondary:true },
     ]);
     const input = document.getElementById("mpCodeInput");
     input.oninput = ()=>{ input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g,""); };
+    input.onkeydown = (e)=>{ if(e.key==="Enter" && input.value.length>=5) renderJoining(input.value); };
     if(prefillCode) input.value = prefillCode.toUpperCase().slice(0,5);
+    setTimeout(()=>{ try{ input.focus(); }catch(_){} }, 50);
   }
 
   async function renderJoining(code){
@@ -3677,7 +3720,7 @@ function showMultiplayer(entry){
     `;
     addOpts([
       { label:"Close", onClick: closeModal, secondary:true },
-      { label:"Leave Room", onClick: async ()=>{ await mpLeaveRoom(); renderStart(); }, secondary:true },
+      { label:"Leave Room", onClick: async ()=>{ await mpLeaveRoom(); renderChoice(); }, secondary:true },
     ]);
   }
 
@@ -3698,7 +3741,7 @@ function showMultiplayer(entry){
   } else if(mpConnected){
     renderConnected();
   } else {
-    renderStart();
+    renderChoice();
   }
   positionModalNextToPeek(wrap);
 }
