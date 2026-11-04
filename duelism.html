@@ -7,7 +7,13 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Duelism">
 <title>Duelism</title>
+<!-- Add to Home Screen: these files sit next to this page on the website (manifest.webmanifest + icons).
+     Installed, Duelism opens full screen with no address bar. Opened as a plain file they're simply skipped. -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
@@ -4915,7 +4921,22 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     boardWrap.style.transform = "scale(" + s + ")";
     boardBox.style.width = (w * s) + "px";
     boardBox.style.height = (h * s) + "px";
-    const sw = document.getElementById("scaleWrap"); if(sw) sw.style.marginBottom = "0px";
+    const sw = document.getElementById("scaleWrap");
+    if(sw){
+      // Short screens: if the whole game (title, board, tray, buttons) is taller than the screen, shrink
+      // all of it evenly so it fits without scrolling. A transform keeps every on-screen measurement
+      // (taps, popups, beams) consistent; the negative margin gives back the space it no longer uses.
+      sw.style.transform = ""; sw.style.marginBottom = "0px";
+      const top = sw.getBoundingClientRect().top + window.scrollY;
+      const need = top + sw.offsetHeight + 16;   // +12: room for the tray's slide-down while a popup is open
+      const f = (vw <= vh * 1.1 && need > vh) ? Math.max(0.68, vh / need) : 1;
+      if(f < 1){
+        sw.style.transformOrigin = "50% 0";
+        sw.style.transform = "scale(" + f.toFixed(4) + ")";
+        sw.style.marginBottom = (-(sw.offsetHeight * (1 - f))).toFixed(1) + "px";
+      }
+      document.documentElement.classList.toggle("fit-short", f < 1);
+    }
     positionPeekButton();
   }
 
