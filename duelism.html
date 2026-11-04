@@ -772,6 +772,105 @@
   #statsDock, #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ transition:transform .25s ease; }
   body.peek-on-deck #statsDock, body.peek-on-deck #newGameBtn, body.peek-on-deck #optionsBtn,
   body.peek-on-deck #multiplayerBtn, body.peek-on-deck #saveLoadBtn{ transform:translateY(12px); }
+  /* Damage arcs (see drawDamageArc). Each beam is stacked layers — core, inner glow, coloured rim,
+     wide halo — each wider and fainter, so it fades gently from the centre outward.
+     Player 1 (white): white core, faint pastel-prism rim. Player 2 (black, "Taken"): black core with a
+     washed-out pale icy rim glowing around it. */
+  #arcLayer{ position:fixed; inset:0; width:100vw; height:100vh; pointer-events:none; z-index:45; overflow:visible; }
+  #arcLayer path{ fill:none; stroke-linecap:round; }
+  #arcLayer .arc-halo{ stroke-width:14; filter:url(#arcBlurWide); }
+  #arcLayer .arc-prism{ stroke-width:7.5; filter:url(#arcBlurSoft); }
+  #arcLayer .arc-inner{ stroke-width:4.6; filter:url(#arcBlurMid); }
+  #arcLayer .arc-core{ stroke-width:2.2; filter:url(#arcBlurCore); }
+  #arcLayer .light .arc-halo{ stroke:rgba(255,255,255,.28); }
+  #arcLayer .light .arc-prism{ opacity:.5; }
+  #arcLayer .light .arc-inner{ stroke:rgba(255,255,255,.6); }
+  #arcLayer .light .arc-core{ stroke:#fff; }
+  /* black ("Taken"): one smooth blend — black centre fading out into a washed-out pale edge */
+  /* same layer widths as the white beam (core 2.2 / inner 4.6 / rim 7.5 / haze 14) — only the blur differs */
+  /* black: a long, gentle ramp — black centre → deep slate → grey-blue → faint pale edge (no hard step) */
+  #arcLayer .arc-mid{ display:none; }
+  #arcLayer .dark .arc-halo{ stroke:rgba(190,210,220,.14); stroke-width:20; filter:url(#arcBlurXL); }
+  #arcLayer .dark .arc-prism{ opacity:.2; stroke-width:11; filter:url(#arcBlurWide); }
+  #arcLayer .dark .arc-mid{ display:inline; stroke:rgba(25,32,40,.32); stroke-width:6; filter:url(#arcBlurInner); }
+  #arcLayer .dark .arc-inner{ stroke:rgba(0,0,0,.6); stroke-width:3.4; filter:url(#arcBlurSoft); }
+  #arcLayer .dark .arc-core{ stroke:#000; stroke-width:1.8; filter:url(#arcBlurMid); }
+  #arcGlowLayer{ position:fixed; inset:0; pointer-events:none; z-index:44; }
+  .arcGlow{ position:absolute; transform:translate(-50%,-50%); border-radius:50%; }
+  .arcGlow > .halo{ position:absolute; inset:0; border-radius:50%; }
+  /* shimmer ring: 1.6x the piece, masked to a band starting right at the piece's edge (62.5% radius) */
+  .arcGlow > .prism{ position:absolute; inset:-30%; border-radius:50%; }
+  .arcGlow.light .prism{ opacity:.42; filter:blur(1.5px);
+    -webkit-mask:radial-gradient(circle closest-side, transparent 60%, #000 64%, #000 74%, transparent 84%);
+            mask:radial-gradient(circle closest-side, transparent 60%, #000 64%, #000 74%, transparent 84%); }
+  .arcGlow.dark .prism{ opacity:.35; filter:blur(4px);
+    -webkit-mask:radial-gradient(circle closest-side, transparent 58%, #000 72%, #000 80%, transparent 100%);
+            mask:radial-gradient(circle closest-side, transparent 58%, #000 72%, #000 80%, transparent 100%); }
+  /* Muted, always-on version of the firing glow on each token's centre disc (the white / black part):
+     a soft glow just inside the disc's rim with a faint slow shimmer — pastel prism on white pieces,
+     the washed-out pale "Taken" tone on black ones. Sized to the disc (~62% of the token) and faded at
+     its edge so it never spills onto the gold. Sits above the art, below the HP number. */
+  .piece.p1.c-red::before, .piece.p1.c-yellow::before, .piece.p1.c-blue::before,
+  .piece.p2.c-red::before, .piece.p2.c-yellow::before, .piece.p2.c-blue::before{
+    display:block; content:""; position:absolute; top:19%; left:19%; width:62%; height:62%; border-radius:50%;
+    pointer-events:none; z-index:2; filter:blur(.6px); transition:none;
+    -webkit-mask:radial-gradient(circle closest-side, transparent 52%, #000 74%, #000 88%, transparent 100%);
+            mask:radial-gradient(circle closest-side, transparent 52%, #000 74%, #000 88%, transparent 100%);
+    animation: discShimmer var(--sh-dur, 9s) linear var(--sh-delay, 0s) infinite var(--sh-dir, normal),
+               discPulse var(--pl-dur, 4s) ease-in-out var(--pl-delay, 0s) infinite alternate;
+    --pl-lo:.55; --pl-hi:1;
+  }
+  .piece.p1.c-red::before, .piece.p1.c-yellow::before, .piece.p1.c-blue::before{
+    display:none; animation:none;
+    background:
+      radial-gradient(circle closest-side, transparent 55%, rgba(255,255,255,.55) 88%, rgba(255,255,255,0) 100%),
+      conic-gradient(hsla(0,100%,78%,.30), hsla(50,100%,78%,.30), hsla(120,100%,78%,.30), hsla(190,100%,78%,.30),
+                     hsla(250,100%,78%,.30), hsla(310,100%,78%,.30), hsla(360,100%,78%,.30));
+  }
+  /* Black tokens: the negative of the white glow, graded through many shades — black → charcoal → deep
+     slate → slate-blue → grey-blue → pale grey-blue → washed-out pale — with a soft band of those same
+     in-between shades drifting slowly round (no hard light/dark steps, so it never reads as a wheel). */
+  .piece.p2.c-red::before, .piece.p2.c-yellow::before, .piece.p2.c-blue::before{
+    filter:blur(1.4px);
+    /* static base: a faint pale sheen over the whole disc, building through the in-between shades to the
+       washed-out pale at the rim. It only breathes — the motion comes from the ripples below. */
+    -webkit-mask:radial-gradient(circle closest-side, rgba(0,0,0,.45) 0%, rgba(0,0,0,.7) 40%, #000 70%, #000 88%, transparent 100%);
+            mask:radial-gradient(circle closest-side, rgba(0,0,0,.45) 0%, rgba(0,0,0,.7) 40%, #000 70%, #000 88%, transparent 100%);
+    background:
+      radial-gradient(circle closest-side,
+        rgba(150,170,182,.055) 0%, rgba(120,140,152,.06) 30%, rgba(90,108,120,.08) 48%, rgba(70,86,98,.12) 60%,
+        rgba(88,106,118,.17) 70%, rgba(118,138,150,.2) 78%, rgba(150,170,181,.21) 85%, rgba(182,200,209,.19) 91%,
+        rgba(208,222,229,.12) 96%, rgba(212,226,232,0) 100%);
+    animation:none; opacity:.95;
+  }
+  .piece.p2.tapped::before{ opacity:.4; }
+  /* Black tokens: slow churning smoke (see ensureSmokeFilter), confined to the disc and fading before the
+     gold; it breathes with the token's own pulse. */
+  .piece .discsmoke{
+    position:absolute; top:19%; left:19%; width:62%; height:62%; border-radius:50%; overflow:hidden;
+    pointer-events:none; z-index:2;
+    -webkit-mask:radial-gradient(circle closest-side, rgba(0,0,0,.6) 0%, rgba(0,0,0,.9) 45%, #000 65%, rgba(0,0,0,.6) 85%, transparent 100%);
+            mask:radial-gradient(circle closest-side, rgba(0,0,0,.6) 0%, rgba(0,0,0,.9) 45%, #000 65%, rgba(0,0,0,.6) 85%, transparent 100%);
+    opacity:.88;
+  }
+  /* No CSS animation here on purpose: an animated transform/opacity inside the scaled board makes the
+     browser re-rasterise the whole token from a resampled layer (soft, jittery art). All of the smoke's
+     motion — flow, churn and its slight pulse — lives inside the SVG filter instead. */
+  .piece .discsmoke svg{ display:block; width:100%; height:100%; }
+  .piece.tapped .discsmoke{ opacity:.35; }
+  .piece.tapped::before{ --pl-lo:.22; --pl-hi:.45; }
+  @keyframes discShimmer{ to{ transform:rotate(360deg); } }
+  @keyframes discPulse{ from{ opacity:var(--pl-lo, .55); } to{ opacity:var(--pl-hi, 1); } }
+  body.anim-off .piece::before{ animation:none; }
+  /* White tokens' shimmer holder (see makeWhiteShine): same footprint and ring mask as before, no CSS animation. */
+  .piece .discshine{
+    position:absolute; top:19%; left:19%; width:62%; height:62%; border-radius:50%; overflow:hidden;
+    pointer-events:none; z-index:2; filter:blur(.6px);
+    -webkit-mask:radial-gradient(circle closest-side, transparent 52%, #000 74%, #000 88%, transparent 100%);
+            mask:radial-gradient(circle closest-side, transparent 52%, #000 74%, #000 88%, transparent 100%);
+  }
+  .piece .discshine svg{ display:block; width:100%; height:100%; }
+  .piece.tapped .discshine{ opacity:.4; }
 </style>
 </head>
 <body>
@@ -1176,8 +1275,251 @@ function readyAllIfNeeded(player){
   }
 }
 
+/* ---- Damage arcs: a beam curving from the piece dealing damage to the piece taking it. It starts
+   slowly and accelerates into the target. White (Player 1) pieces glow white with a faint prismatic
+   shimmer and fire a white prismatic beam; black (Player 2) pieces get the photo negative — black core
+   and glow, with the shimmer in the inverted (complementary) colours. Purely visual: drawn on fixed,
+   click-through layers over the page, then faded and removed. */
+// Each token's muted disc glow gets its own shimmer speed, pulse rate, phase and (for some) direction,
+// so the six never move in lockstep. Phases are anchored to the clock (negative delays) so re-rendering
+// the board doesn't restart them.
+const DISC_GLOW = {};
+function setDiscGlowTiming(el, u){
+  const key = u.player + "-" + u.color;
+  let t = DISC_GLOW[key];
+  if(!t){
+    const R = Math.random;
+    t = DISC_GLOW[key] = { spin: 7 + R()*6, spin2: 5 + R()*4, wave: 3.6 + R()*2.2, pulse: 3.2 + R()*2.6, dir: R()<0.35 ? "reverse" : "normal",
+                           s0: R()*20, s1: R()*20, w0: R()*20, p0: R()*20 };
+  }
+  const now = performance.now()/1000;
+  el.style.setProperty("--sh-dur", t.spin.toFixed(2) + "s");
+  el.style.setProperty("--sh-delay", (-((now + t.s0) % t.spin)).toFixed(2) + "s");
+  el.style.setProperty("--sh-dir", t.dir);
+  el.style.setProperty("--sw-dur", t.spin2.toFixed(2) + "s");
+  el.style.setProperty("--wv-dur", t.wave.toFixed(2) + "s");
+  t.turn = t.turn || (40 + Math.random()*20);
+  el.style.setProperty("--smk-turn", t.turn.toFixed(1) + "s");
+  el.style.setProperty("--smk-delay", (-((now + t.s0*3) % t.turn)).toFixed(2) + "s");
+  el.style.setProperty("--wv-delay", (-((now + t.w0) % t.wave)).toFixed(2) + "s");
+  el.style.setProperty("--wv-delay2", (-((now + t.w0 + t.wave/2) % t.wave)).toFixed(2) + "s");
+  el.style.setProperty("--sw-delay", (-((now + t.s1) % t.spin2)).toFixed(2) + "s");
+  el.style.setProperty("--pl-dur", t.pulse.toFixed(2) + "s");
+  el.style.setProperty("--pl-delay", (-((now + t.p0) % (t.pulse*2))).toFixed(2) + "s");
+}
+// Black tokens' churning "smoke in water": one SVG filter per black piece (own noise pattern and pace),
+// kept in a hidden <svg> outside the board so its slow animation carries on across board re-renders.
+// Soft fractal noise is warped by a second, slower noise whose strength swells and settles (the churn and
+// the pulse), then mapped to a pale icy tint whose opacity follows the noise — so every shade between the
+// black disc and the washed-out pale appears, with no edges or geometry.
+function ensureSmokeFilter(key){
+  const id = "smk-" + key;
+  if(document.getElementById(id)) return id;
+  let host = document.getElementById("smokeDefs");
+  if(!host){
+    host = document.createElementNS("http://www.w3.org/2000/svg","svg");
+    host.id = "smokeDefs"; host.setAttribute("width","0"); host.setAttribute("height","0");
+    host.style.position = "absolute"; host.style.width = host.style.height = "0";
+    document.body.appendChild(host);
+  }
+  const R = Math.random, seed = 1 + Math.floor(R()*900), seed2 = 1 + Math.floor(R()*900);
+  const churn = (14 + R()*8).toFixed(1), drift = (22 + R()*12).toFixed(1);
+  const f0 = (0.026 + R()*0.008).toFixed(4);
+  host.insertAdjacentHTML("beforeend", `
+    <filter id="${id}" x="0" y="0" width="100" height="100" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="${f0}" numOctaves="2" seed="${seed}" result="smoke"/>
+      <feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="${seed2}" result="flow">
+        <animate attributeName="baseFrequency" values="0.011;0.016;0.012;0.011" dur="${drift}s" repeatCount="indefinite" calcMode="spline"
+                 keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1"/>
+      </feTurbulence>
+      <feOffset in="smoke" dx="0" dy="0" result="moved">
+        <animate attributeName="dx" values="0;9;0;-9;0" dur="${churn}s" repeatCount="indefinite" calcMode="spline"
+                 keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1;.45 0 .55 1"/>
+        <animate attributeName="dy" values="9;0;-9;0;9" dur="${churn}s" repeatCount="indefinite" calcMode="spline"
+                 keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1;.45 0 .55 1"/>
+      </feOffset>
+      <feDisplacementMap in="moved" in2="flow" xChannelSelector="R" yChannelSelector="G" scale="20" result="churned">
+        <animate attributeName="scale" values="17;22;19;21;17" dur="${churn}s" repeatCount="indefinite" calcMode="spline"
+                 keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1;.45 0 .55 1"/>
+      </feDisplacementMap>
+      <feColorMatrix in="churned" type="matrix" values="0 0 0 0 0.74  0 0 0 0 0.80  0 0 0 0 0.84  0.9 0 0 0 -0.36"/>
+      <feGaussianBlur stdDeviation="2.8" result="soft"/>
+      <feComponentTransfer in="soft">
+        <feFuncA type="linear" slope="1">
+          <animate attributeName="slope" values="0.9;1;0.9" dur="${(5 + R()*3).toFixed(1)}s" repeatCount="indefinite" calcMode="spline"
+                   keySplines=".45 0 .55 1;.45 0 .55 1"/>
+        </feFuncA>
+      </feComponentTransfer>
+    </filter>`);
+  return id;
+}
+// White tokens' muted prismatic shimmer, drawn as a small self-animating SVG (SMIL) rather than with CSS
+// animations: a CSS-animated layer inside the scaled board makes the browser periodically re-rasterise the
+// whole token from a resampled copy (the gold art goes soft). The SVG only repaints its own pixels.
+// Negative begin times anchor each piece's phase to the clock so re-renders don't restart it.
+let whiteShineSeq = 0;
+function makeWhiteShine(u){
+  const key = u.player + "-" + u.color;
+  const t = DISC_GLOW[key];
+  const now = performance.now()/1000;
+  const spin = t ? t.spin : 9, pulse = t ? t.pulse : 4;
+  const sBegin = -(((now + (t ? t.s0 : 0)) % spin)).toFixed(2), pBegin = -(((now + (t ? t.p0 : 0)) % (pulse*2))).toFixed(2);
+  const rev = t && t.dir === "reverse";
+  const id = "wsh" + (++whiteShineSeq);
+  let wedges = "";
+  for(let i=0;i<24;i++){
+    const a0 = (i*15-1)*Math.PI/180, a1 = ((i+1)*15+1)*Math.PI/180;
+    const x0 = 50+60*Math.cos(a0), y0 = 50+60*Math.sin(a0), x1 = 50+60*Math.cos(a1), y1 = 50+60*Math.sin(a1);
+    wedges += `<path d="M50 50 L${x0.toFixed(1)} ${y0.toFixed(1)} A60 60 0 0 1 ${x1.toFixed(1)} ${y1.toFixed(1)} Z" fill="hsl(${i*15},100%,78%)"/>`;
+  }
+  const el = document.createElement("div");
+  el.className = "discshine";
+  el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none">
+    <defs>
+      <radialGradient id="${id}r" cx="50%" cy="50%" r="50%">
+        <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/>
+        <stop offset=".88" stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+      </radialGradient>
+      <filter id="${id}b" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.2"/></filter>
+    </defs>
+    <g>
+      <animate attributeName="opacity" values=".55;1;.55" dur="${(pulse*2).toFixed(2)}s" begin="${pBegin}s" repeatCount="indefinite"
+               calcMode="spline" keySplines=".45 0 .55 1;.45 0 .55 1"/>
+      <circle cx="50" cy="50" r="50" fill="url(#${id}r)"/>
+      <g opacity=".3" filter="url(#${id}b)">
+        <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="${rev ? -360 : 360} 50 50"
+                          dur="${spin.toFixed(2)}s" begin="${sBegin}s" repeatCount="indefinite"/>
+        ${wedges}
+      </g>
+    </g>
+  </svg>`;
+  return el;
+}
+let arcSourceDefault = null;
+let arcFlip = 1, arcSeq = 0;
+// When the last beam in flight lands. Anything that follows a hit — the next turn starting (and its
+// "No Legal Moves" notice), a VP-colour or conversion popup, the win screen — waits until then.
+let arcBusyUntil = 0;
+function arcWaitMs(){ return Math.max(0, arcBusyUntil - performance.now()); }
+const ARC_HUES = [0, 50, 120, 190, 250, 310, 360];
+// White's faint pastel spectrum; black's "Taken" counterpart is a washed-out, pale icy rim instead.
+const TAKEN_RIM = ["hsl(192,30%,90%)","hsl(205,16%,74%)","hsl(186,38%,82%)","hsl(200,10%,96%)","hsl(196,32%,70%)","hsl(210,18%,86%)","hsl(192,30%,90%)"];
+function arcSpectrum(dark){
+  return dark ? TAKEN_RIM : ARC_HUES.map(h => `hsl(${h},100%,80%)`);
+}
+function arcLayers(){
+  let svg = document.getElementById("arcLayer");
+  if(!svg){
+    svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
+    svg.id = "arcLayer";
+    svg.innerHTML = `<defs>
+      <filter id="arcBlurWide" filterUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4"/></filter>
+      <filter id="arcBlurSoft" filterUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.6"/></filter>
+      <filter id="arcBlurMid" filterUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="0.9"/></filter>
+      <filter id="arcBlurCore" filterUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="0.45"/></filter>
+      <filter id="arcBlurInner" filterUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+      <filter id="arcBlurXL" filterUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter></defs>`;
+    document.body.appendChild(svg);
+  }
+  let glows = document.getElementById("arcGlowLayer");
+  if(!glows){ glows = document.createElement("div"); glows.id = "arcGlowLayer"; document.body.appendChild(glows); }
+  return { svg, glows };
+}
+// A glow ring around the firing piece (once per piece per burst, even if it hits several targets).
+function pieceGlow(cell, dark, total){
+  const pieceEl = cell.querySelector(".piece");
+  const pr = (pieceEl || cell).getBoundingClientRect();
+  const key = cell.dataset.r + "," + cell.dataset.c + "," + (dark?1:0);
+  const now = performance.now();
+  if(pieceGlow.last[key] && now - pieceGlow.last[key] < 150) return;
+  pieceGlow.last[key] = now;
+  const { glows } = arcLayers();
+  // The token art fills only ~90% of the piece's box (transparent margin around it); start the glow just
+  // inside the visible gold rim so there's never a gap between token and glow.
+  const d = Math.max(pr.width, pr.height) * 0.88;
+  const el = document.createElement("div");
+  el.className = "arcGlow " + (dark ? "dark" : "light");
+  el.style.left = (pr.left + pr.width/2) + "px";
+  el.style.top = (pr.top + pr.height/2) + "px";
+  el.style.width = el.style.height = d + "px";
+  const spec = arcSpectrum(dark);
+  el.innerHTML = `<div class="halo"></div><div class="prism" style="background:conic-gradient(${spec.join(",")})"></div>`;
+  glows.appendChild(el);
+  // Shadows hug the piece's rim and only their outer reach grows — the inner edge never leaves the piece.
+  const S = dark
+    ? (k)=>`0 0 ${3*k}px ${1*k}px rgba(0,0,0,.85), 0 0 ${7*k}px ${2.5*k}px rgba(14,18,24,.6), 0 0 ${12*k}px ${4*k}px rgba(55,70,80,.38), 0 0 ${18*k}px ${6*k}px rgba(120,145,160,.24), 0 0 ${26*k}px ${8*k}px rgba(185,208,218,.12)`
+    : (k)=>`0 0 ${2*k}px ${1*k}px rgba(255,255,255,.95), 0 0 ${7*k}px ${3*k}px rgba(255,255,255,.55), 0 0 ${14*k}px ${5*k}px rgba(255,255,255,.22), 0 0 ${22*k}px ${7*k}px rgba(255,255,255,.08), 0 0 0 0 rgba(255,255,255,0)`;
+  const halo = el.querySelector(".halo");
+  halo.animate([{ boxShadow:S(0.2) }, { boxShadow:S(1), offset:.32 }, { boxShadow:S(1.05), offset:.62 }, { boxShadow:S(1.25) }],
+               { duration: total, easing:"ease-out", fill:"forwards" });
+  el.animate([{ opacity:0 }, { opacity:1, offset:.2 }, { opacity:1, offset:.62 }, { opacity:0 }],
+             { duration: total, easing:"ease-out", fill:"forwards" }).onfinish = ()=>el.remove();
+  el.querySelector(".prism").animate([{ transform:"rotate(0deg)" }, { transform:"rotate(360deg)" }], { duration:1400, iterations:Infinity });
+  setTimeout(()=>{ if(el.isConnected) el.remove(); }, total+200);
+}
+pieceGlow.last = {};
+
+function drawDamageArc(from, to, amt){
+  if(!from || !to || from===to || animationLevel===0) return;
+  if(typeof state==="undefined" || !state.units.includes(from) || !state.units.includes(to)) return;
+  const board = document.getElementById("board");
+  if(!board) return;
+  const ca = board.children[from.r*4+from.c], cb = board.children[to.r*4+to.c];
+  if(!ca || !cb) return;
+  ca.dataset.r = from.r; ca.dataset.c = from.c;
+  const ra = ca.getBoundingClientRect(), rb = cb.getBoundingClientRect();
+  const X1 = ra.left+ra.width/2, Y1 = ra.top+ra.height/2, X2 = rb.left+rb.width/2, Y2 = rb.top+rb.height/2;
+  const len = Math.hypot(X2-X1, Y2-Y1);
+  if(len < 4) return;
+  const dark = from.player === 2;          // Player 1 = white pieces, Player 2 = black pieces
+  const hi = animationLevel>=2;
+  const charge = hi ? 200 : 110, draw = hi ? 420 : 260, hold = 140, fade = hi ? 480 : 300;
+  // One beam per point of damage, launched like a volley: random stagger, varied curve, slight jitter.
+  const n = Math.max(1, Math.min(8, amt||1));
+  const spread = n>1 ? (hi ? 320 : 200) : 0;
+  const side = arcFlip; arcFlip = -arcFlip;          // each target's volley bows to alternating sides
+  pieceGlow(ca, dark, charge + spread + draw + hold + fade);
+  arcBusyUntil = Math.max(arcBusyUntil, performance.now() + charge + spread + draw + 220);
+  for(let i=0;i<n;i++){
+    const delay = charge + (i===0 ? 0 : Math.random()*spread);
+    const j = ()=> (Math.random()-.5) * Math.min(8, ra.width*0.08);
+    const x1 = X1 + j(), y1 = Y1 + j(), x2 = X2 + j(), y2 = Y2 + j();
+    const dx = x2-x1, dy = y2-y1, l = Math.hypot(dx,dy) || 1;
+    const bow = Math.min(80, l*(0.14 + Math.random()*0.26)) * (n>1 && Math.random()<0.25 ? -side : side);
+    const cx = (x1+x2)/2 - dy/l*bow, cy = (y1+y2)/2 + dx/l*bow;
+    fireBeam(x1,y1,cx,cy,x2,y2, dark, delay, draw, hold, fade);
+  }
+}
+
+function fireBeam(x1,y1,cx,cy,x2,y2, dark, delay, draw, hold, fade){
+  const { svg } = arcLayers();
+  const id = "arcGrad" + (++arcSeq);
+  const dx = x2-x1, dy = y2-y1;
+  const spec = arcSpectrum(dark);
+  const stops = spec.map((c,i)=>`<stop offset="${(i/(spec.length-1)).toFixed(3)}" stop-color="${c}"/>`).join("");
+  const pd = `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+  const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+  g.setAttribute("class", "arc " + (dark ? "dark" : "light"));
+  g.innerHTML = `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" spreadMethod="reflect">${stops}
+      <animateTransform attributeName="gradientTransform" type="translate" from="0 0" to="${(dx*0.5).toFixed(1)} ${(dy*0.5).toFixed(1)}" dur="0.9s" repeatCount="indefinite"/></linearGradient></defs>
+    <path class="arc-halo" d="${pd}"/><path class="arc-prism" d="${pd}" stroke="url(#${id})"/><path class="arc-mid" d="${pd}"/><path class="arc-inner" d="${pd}"/><path class="arc-core" d="${pd}"/>`;
+  svg.appendChild(g);
+  const paths = [...g.querySelectorAll("path")];
+  const L = paths[paths.length-1].getTotalLength();
+  paths.forEach(pth=>{
+    pth.style.strokeDasharray = `${L} ${L}`;
+    pth.style.strokeDashoffset = L;
+    // slow start, accelerating into the target
+    pth.animate([{ strokeDashoffset:L }, { strokeDashoffset:0 }], { duration:draw, delay, easing:"cubic-bezier(.7,0,.95,.45)", fill:"forwards" });
+  });
+  const total = delay + draw + hold + fade;
+  g.animate([{ opacity:1 }, { opacity:1, offset:(delay+draw+hold)/total }, { opacity:0 }], { duration:total, fill:"forwards" }).onfinish = ()=>g.remove();
+  setTimeout(()=>{ if(g.isConnected) g.remove(); }, total+200);
+}
+
 function damage(unit, amt, sourceColor, opts={}){
   if(amt<=0) return 0;
+  drawDamageArc(opts.from || arcSourceDefault, unit, amt);
   const before = unit.hp;
   unit.hp = Math.max(0, unit.hp - amt);
   const applied = before - unit.hp;
@@ -1320,8 +1662,20 @@ let selectedUnit = null;
 let pendingDest = null; // mobile: first tap on a legal space previews it (outlined), second tap on the same space commits
 let pendingExtraTurn = false;
 
+// The original popup functions, captured at load (function declarations are hoisted) before any later
+// script wraps these names — a deferred popup re-enters here, not through the wrapper a second time.
+const _askChoiceBase = askChoice, _showNoticeBase = showNotice, _showWinModalBase = showWinModal;
+let turnStartPending = false;
 function startTurnLoop(){
   if(state.winner){ render(); return; }
+  const wait = arcWaitMs();
+  if(wait > 0){
+    // the turn that just ended is still playing out its beams — hand over once they've landed
+    const g = state;
+    turnStartPending = true; render();
+    setTimeout(()=>{ turnStartPending = false; if(state===g) startTurnLoop(); else render(); }, wait + 20);
+    return;
+  }
   checkNoLegalMoves();
 }
 
@@ -1396,6 +1750,7 @@ function tryMove(unit, r, c){
 }
 
 function resolveTile(unit){
+  arcSourceDefault = unit;   // damage from this tile's effect arcs out from the piece that landed here
   const tile = tileAt(unit.r, unit.c);
   const mover = unit.player;
   const opp = opponentOf(mover);
@@ -1445,9 +1800,9 @@ function runNamedCard(name, unit){
           if(targets.length){
             const each = Math.floor(6/targets.length);
             let rem = 6 - each*targets.length;
-            targets.forEach(t=>{ let amt=each; if(rem>0){amt++;rem--;} damage(t, amt, chosen.color); });
+            targets.forEach(t=>{ let amt=each; if(rem>0){amt++;rem--;} damage(t, amt, chosen.color, { from: chosen }); });
           }
-          damage(chosen, 2, chosen.color);
+          damage(chosen, 2, chosen.color, { from: chosen });   // self-damage: no arc
           logMsg(`Dark: distributed 6 damage among opponent pieces sharing the chosen piece's row/column; it took 2 damage itself.`);
           endTurn();
         });
@@ -1465,7 +1820,7 @@ function runNamedCard(name, unit){
           askChoice("Evil — Your Choice", `Player ${mover}, choose another of Player ${opp}'s pieces. The two chosen pieces put 4 damage on each other.`,
             secondChoices.map(u=>({label:`${cw(u.color)} piece (${u.hp} HP)`, value:u, color:COLOR_HEX[u.color]})),
             (secondPick)=>{
-              damage(firstPick, 4, secondPick.color); damage(secondPick, 4, firstPick.color);
+              damage(firstPick, 4, secondPick.color, { from: secondPick }); damage(secondPick, 4, firstPick.color, { from: firstPick });
               logMsg(`Evil: Player ${opp}'s ${cw(firstPick.color)} and ${cw(secondPick.color)} pieces each took 4 damage from each other.`);
               endTurn();
             });
@@ -1744,6 +2099,7 @@ function distributeHP(player, remaining, done){
 /* ============================= UI: MODAL ============================= */
 
 function askChoice(title, desc, options, onPick, opts={}){
+  { const w = arcWaitMs(); if(w > 0){ setTimeout(()=>_askChoiceBase(title, desc, options, onPick, opts), w + 20); return; } }
   hideTooltip();
   clearPeekHighlights();
   const root = document.getElementById("modalRoot");
@@ -1781,6 +2137,7 @@ function askChoice(title, desc, options, onPick, opts={}){
 }
 
 function showNotice(title, desc, onOk){
+  { const w = arcWaitMs(); if(w > 0){ setTimeout(()=>_showNoticeBase(title, desc, onOk), w + 20); return; } }
   hideTooltip();
   clearPeekHighlights();
   const root = document.getElementById("modalRoot");
@@ -1825,6 +2182,7 @@ function confirmNewGame(){
 }
 
 function showWinModal(player){
+  { const w = arcWaitMs(); if(w > 0){ setTimeout(()=>_showWinModalBase(player), w + 20); return; } }
   hideTooltip();
   clearPeekHighlights();
   const root = document.getElementById("modalRoot");
@@ -2995,6 +3353,14 @@ function renderBoard(){
         p.className = `piece p${u.player} c-${u.color}` + (u.tapped ? " tapped":"");
         p.style.setProperty("--ambient-light", getAmbientLight(r,c).toFixed(3));
         p.dataset.key = `${u.player}-${u.color}`;
+        setDiscGlowTiming(p, u);
+        if(u.player===1) p.appendChild(makeWhiteShine(u));
+        if(u.player===2){
+          const fid = ensureSmokeFilter(`${u.player}-${u.color}`);
+          const sm = document.createElement("div"); sm.className = "discsmoke";
+          sm.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><rect width="100" height="100" filter="url(#${fid})"/></svg>`;
+          p.appendChild(sm);
+        }
         if(u._animFrom){
           p.dataset.fromIdx = u._animFrom.r*4 + u._animFrom.c;
           u._animFrom = null;
@@ -3353,6 +3719,7 @@ function showSettings(){
   document.getElementById("driftToggle").onchange = (e)=> setDriftEnabled(e.target.checked);
   document.getElementById("animSlider").oninput = (e)=>{
     animationLevel = Number(e.target.value);
+    document.body.classList.toggle("anim-off", animationLevel===0);
     document.getElementById("animLevelLabel").textContent = animLabels[animationLevel];
   };
 }
@@ -3558,6 +3925,7 @@ function broadcastStateIfChanged(){
 // networked restriction on top — once connected, only the player this browser was assigned as can
 // act, and only on their own turn.
 function isMyTurnOrLocal(){
+  if(turnStartPending) return false;     // next turn hasn't begun yet (previous turn's beams still landing)
   return !mpConnected || mpLocalPlayerNumber===state.current;
 }
 
@@ -5280,8 +5648,8 @@ function aiSchedule(){
 
 function aiPlay(t){
   if(!aiIsComputersTurn()) return;
-  // wait for any open popup (e.g. a notice the human is reading) before moving
-  if(document.getElementById("modalRoot").children.length){ setTimeout(()=>{ if(t===aiToken) aiPlay(t); }, 400); return; }
+  // wait for any open popup (e.g. a notice the human is reading) or beams still landing before moving
+  if(document.getElementById("modalRoot").children.length || (typeof arcWaitMs==="function" && arcWaitMs()>0)){ setTimeout(()=>{ if(t===aiToken) aiPlay(t); }, 400); return; }
   aiSetThinking(true);
   const started = Date.now();
   aiCompute({ type:"move", S:aiToEngine(), opts:Object.assign({ W:DuelAI.DEFAULT_WEIGHTS }, AI_MOVE_OPTS[aiMode.level]) }).then(res=>{
@@ -5337,6 +5705,8 @@ function aiAfterThink(t, res){
 
   const _askChoice = askChoice;
   askChoice = function(title, desc, options, onPick, opts={}){
+    // wait for any damage beams still in flight before showing (or auto-answering) the popup
+    if(typeof arcWaitMs==="function"){ const w = arcWaitMs(); if(w > 0){ setTimeout(()=>askChoice(title, desc, options, onPick, opts), w + 20); return; } }
     const mirror = aiMirror;
     if(!aiMode.enabled || !mirror || mirror.broken || opts.noPeek) return _askChoice(title, desc, options, onPick, opts);
     let d = null;
