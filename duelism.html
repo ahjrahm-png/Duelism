@@ -777,24 +777,7 @@
      Player 1 (white): white core, faint pastel-prism rim. Player 2 (black, "Taken"): black core with a
      washed-out pale icy rim glowing around it. */
   #arcLayer{ position:fixed; inset:0; width:100vw; height:100vh; pointer-events:none; z-index:45; overflow:visible; }
-  #arcLayer path{ fill:none; stroke-linecap:round; }
-  #arcLayer .arc-halo{ stroke-width:14; filter:url(#arcBlurWide); }
-  #arcLayer .arc-prism{ stroke-width:7.5; filter:url(#arcBlurSoft); }
-  #arcLayer .arc-inner{ stroke-width:4.6; filter:url(#arcBlurMid); }
-  #arcLayer .arc-core{ stroke-width:2.2; filter:url(#arcBlurCore); }
-  #arcLayer .light .arc-halo{ stroke:rgba(255,255,255,.28); }
-  #arcLayer .light .arc-prism{ opacity:.5; }
-  #arcLayer .light .arc-inner{ stroke:rgba(255,255,255,.6); }
-  #arcLayer .light .arc-core{ stroke:#fff; }
-  /* black ("Taken"): one smooth blend — black centre fading out into a washed-out pale edge */
-  /* same layer widths as the white beam (core 2.2 / inner 4.6 / rim 7.5 / haze 14) — only the blur differs */
-  /* black: a long, gentle ramp — black centre → deep slate → grey-blue → faint pale edge (no hard step) */
-  #arcLayer .arc-mid{ display:none; }
-  #arcLayer .dark .arc-halo{ stroke:rgba(190,210,220,.14); stroke-width:20; filter:url(#arcBlurXL); }
-  #arcLayer .dark .arc-prism{ opacity:.2; stroke-width:11; filter:url(#arcBlurWide); }
-  #arcLayer .dark .arc-mid{ display:inline; stroke:rgba(25,32,40,.32); stroke-width:6; filter:url(#arcBlurInner); }
-  #arcLayer .dark .arc-inner{ stroke:rgba(0,0,0,.6); stroke-width:3.4; filter:url(#arcBlurSoft); }
-  #arcLayer .dark .arc-core{ stroke:#000; stroke-width:1.8; filter:url(#arcBlurMid); }
+  /* beam layer colours, widths and blurs live in BEAM_LAYERS (each layer is a tapered filled shape) */
   #arcGlowLayer{ position:fixed; inset:0; pointer-events:none; z-index:44; }
   .arcGlow{ position:absolute; transform:translate(-50%,-50%); border-radius:50%; }
   .arcGlow > .halo{ position:absolute; inset:0; border-radius:50%; }
@@ -1325,8 +1308,11 @@ function ensureSmokeFilter(key){
   const R = Math.random, seed = 1 + Math.floor(R()*900), seed2 = 1 + Math.floor(R()*900);
   const churn = (14 + R()*8).toFixed(1), drift = (22 + R()*12).toFixed(1);
   const f0 = (0.026 + R()*0.008).toFixed(4);
+  const seed3 = 1 + Math.floor(R()*900);
+  const fx = (17 + R()*9).toFixed(1), fy = (23 + R()*11).toFixed(1);     // the density field drifts on its own path
+  const A = (v)=> (v*(R()<.5?-1:1)).toFixed(1);
   host.insertAdjacentHTML("beforeend", `
-    <filter id="${id}" x="0" y="0" width="100" height="100" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <filter id="${id}" x="-25" y="-25" width="150" height="150" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feTurbulence type="fractalNoise" baseFrequency="${f0}" numOctaves="2" seed="${seed}" result="smoke"/>
       <feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="${seed2}" result="flow">
         <animate attributeName="baseFrequency" values="0.011;0.016;0.012;0.011" dur="${drift}s" repeatCount="indefinite" calcMode="spline"
@@ -1342,14 +1328,19 @@ function ensureSmokeFilter(key){
         <animate attributeName="scale" values="17;22;19;21;17" dur="${churn}s" repeatCount="indefinite" calcMode="spline"
                  keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1;.45 0 .55 1"/>
       </feDisplacementMap>
-      <feColorMatrix in="churned" type="matrix" values="0 0 0 0 0.74  0 0 0 0 0.80  0 0 0 0 0.84  0.9 0 0 0 -0.36"/>
+      <feColorMatrix in="churned" type="matrix" values="0 0 0 0 0.74  0 0 0 0 0.80  0 0 0 0 0.84  1.35 0 0 0 -0.5"/>
       <feGaussianBlur stdDeviation="2.8" result="soft"/>
-      <feComponentTransfer in="soft">
-        <feFuncA type="linear" slope="1">
-          <animate attributeName="slope" values="0.9;1;0.9" dur="${(5 + R()*3).toFixed(1)}s" repeatCount="indefinite" calcMode="spline"
-                   keySplines=".45 0 .55 1;.45 0 .55 1"/>
-        </feFuncA>
-      </feComponentTransfer>
+      <!-- local fading: a very soft, slow "density" field drifts across the disc on its own path, so
+           patches of smoke thin out and thicken at different times instead of the whole thing pulsing -->
+      <feTurbulence type="fractalNoise" baseFrequency="0.016" numOctaves="1" seed="${seed3}" result="dens"/>
+      <feOffset in="dens" dx="0" dy="0" result="densMoved">
+        <animate attributeName="dx" values="0;${A(16)};${A(7)};${A(13)};0" dur="${fx}s" repeatCount="indefinite" calcMode="spline"
+                 keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1;.45 0 .55 1"/>
+        <animate attributeName="dy" values="0;${A(11)};${A(16)};${A(6)};0" dur="${fy}s" repeatCount="indefinite" calcMode="spline"
+                 keySplines=".45 0 .55 1;.45 0 .55 1;.45 0 .55 1;.45 0 .55 1"/>
+      </feOffset>
+      <feColorMatrix in="densMoved" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  3.2 0 0 0 -1.05" result="densA"/>
+      <feComposite in="soft" in2="densA" operator="in"/>
     </filter>`);
   return id;
 }
@@ -1426,9 +1417,21 @@ function arcLayers(){
   return { svg, glows };
 }
 // A glow ring around the firing piece (once per piece per burst, even if it hits several targets).
+// Where a piece will come to rest in its cell: its on-screen box with any in-progress glide (a
+// translate transform) taken back out. Rings and beams anchor here, so a piece still sliding into
+// place when a hit fires doesn't leave its ring (or a beam end) behind mid-slide.
+function restingPiece(cell){
+  const cr = cell.getBoundingClientRect();
+  const pe = cell.querySelector(".piece");
+  if(!pe) return { x: cr.left + cr.width/2, y: cr.top + cr.height/2, w: cr.width*0.4 };
+  const r = pe.getBoundingClientRect();
+  const sc = cell.offsetWidth ? cr.width / cell.offsetWidth : 1;          // board scale
+  let tx = 0, ty = 0, k = 1;
+  try{ const m = new DOMMatrixReadOnly(getComputedStyle(pe).transform); tx = m.m41; ty = m.m42; k = Math.hypot(m.a, m.b) || 1; }catch(_){}
+  return { x: r.left + r.width/2 - tx*sc, y: r.top + r.height/2 - ty*sc, w: r.width / k };
+}
 function pieceGlow(cell, dark, total){
-  const pieceEl = cell.querySelector(".piece");
-  const pr = (pieceEl || cell).getBoundingClientRect();
+  const rest = restingPiece(cell);
   const key = cell.dataset.r + "," + cell.dataset.c + "," + (dark?1:0);
   const now = performance.now();
   if(pieceGlow.last[key] && now - pieceGlow.last[key] < 150) return;
@@ -1436,11 +1439,11 @@ function pieceGlow(cell, dark, total){
   const { glows } = arcLayers();
   // The token art fills only ~90% of the piece's box (transparent margin around it); start the glow just
   // inside the visible gold rim so there's never a gap between token and glow.
-  const d = Math.max(pr.width, pr.height) * 0.88;
+  const d = rest.w * 0.88;
   const el = document.createElement("div");
   el.className = "arcGlow " + (dark ? "dark" : "light");
-  el.style.left = (pr.left + pr.width/2) + "px";
-  el.style.top = (pr.top + pr.height/2) + "px";
+  el.style.left = rest.x + "px";
+  el.style.top = rest.y + "px";
   el.style.width = el.style.height = d + "px";
   const spec = arcSpectrum(dark);
   el.innerHTML = `<div class="halo"></div><div class="prism" style="background:conic-gradient(${spec.join(",")})"></div>`;
@@ -1467,8 +1470,9 @@ function drawDamageArc(from, to, amt){
   const ca = board.children[from.r*4+from.c], cb = board.children[to.r*4+to.c];
   if(!ca || !cb) return;
   ca.dataset.r = from.r; ca.dataset.c = from.c;
-  const ra = ca.getBoundingClientRect(), rb = cb.getBoundingClientRect();
-  const X1 = ra.left+ra.width/2, Y1 = ra.top+ra.height/2, X2 = rb.left+rb.width/2, Y2 = rb.top+rb.height/2;
+  const ra = ca.getBoundingClientRect();
+  const pa = restingPiece(ca), pb = restingPiece(cb);
+  const X1 = pa.x, Y1 = pa.y, X2 = pb.x, Y2 = pb.y;
   const len = Math.hypot(X2-X1, Y2-Y1);
   if(len < 4) return;
   const dark = from.player === 2;          // Player 1 = white pieces, Player 2 = black pieces
@@ -1482,13 +1486,39 @@ function drawDamageArc(from, to, amt){
   arcBusyUntil = Math.max(arcBusyUntil, performance.now() + charge + spread + draw + 220);
   for(let i=0;i<n;i++){
     const delay = charge + (i===0 ? 0 : Math.random()*spread);
-    const j = ()=> (Math.random()-.5) * Math.min(8, ra.width*0.08);
-    const x1 = X1 + j(), y1 = Y1 + j(), x2 = X2 + j(), y2 = Y2 + j();
+    const j = ()=> (Math.random()-.5) * Math.min(5, ra.width*0.05);
+    const x1 = X1, y1 = Y1, x2 = X2 + j(), y2 = Y2 + j();   // shared origin: the firing piece's centre
     const dx = x2-x1, dy = y2-y1, l = Math.hypot(dx,dy) || 1;
     const bow = Math.min(80, l*(0.14 + Math.random()*0.26)) * (n>1 && Math.random()<0.25 ? -side : side);
     const cx = (x1+x2)/2 - dy/l*bow, cy = (y1+y2)/2 + dx/l*bow;
     fireBeam(x1,y1,cx,cy,x2,y2, dark, delay, draw, hold, fade);
   }
+}
+
+// Beam layers, outermost first: [class, full width, fill, opacity, blur filter]. Widths are at the
+// beam's thickest point; each layer tapers to a fine point at both ends.
+const BEAM_LAYERS = {
+  light: [["halo",14,"rgba(255,255,255,.28)",1,"arcBlurWide"], ["prism",7.5,"GRAD",.5,"arcBlurSoft"],
+          ["inner",4.6,"rgba(255,255,255,.6)",1,"arcBlurMid"], ["core",2.2,"#fff",1,"arcBlurCore"]],
+  dark:  [["halo",20,"rgba(190,210,220,.14)",1,"arcBlurXL"], ["prism",11,"GRAD",.2,"arcBlurWide"],
+          ["mid",6,"rgba(25,32,40,.32)",1,"arcBlurInner"], ["inner",3.4,"rgba(0,0,0,.6)",1,"arcBlurSoft"],
+          ["core",1.8,"#000",1,"arcBlurMid"]],
+};
+// A filled outline around the quadratic curve whose half-width swells smoothly from a point at the start
+// to full width and narrows back to a point at the end (no blunt caps).
+function taperedBeamPath(x1,y1,cx,cy,x2,y2, w){
+  const N = 36, L = [], R = [];
+  for(let i=0;i<=N;i++){
+    const t = i/N, u = 1-t;
+    const px = u*u*x1 + 2*u*t*cx + t*t*x2, py = u*u*y1 + 2*u*t*cy + t*t*y2;
+    let tx = 2*u*(cx-x1) + 2*t*(x2-cx), ty = 2*u*(cy-y1) + 2*t*(y2-cy);
+    const tl = Math.hypot(tx,ty) || 1; tx/=tl; ty/=tl;
+    const sm = (e)=>{ const k = Math.min(1, Math.max(0, e)); return k*k*(3-2*k); };
+    const h = (w/2) * (0.04 + 0.96 * sm(t/0.2) * sm(u/0.16));
+    L.push([px - ty*h, py + tx*h]); R.push([px + ty*h, py - tx*h]);
+  }
+  const pts = L.concat(R.reverse());
+  return "M" + pts.map(p=>p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" L") + " Z";
 }
 
 function fireBeam(x1,y1,cx,cy,x2,y2, dark, delay, draw, hold, fade){
@@ -1497,21 +1527,24 @@ function fireBeam(x1,y1,cx,cy,x2,y2, dark, delay, draw, hold, fade){
   const dx = x2-x1, dy = y2-y1;
   const spec = arcSpectrum(dark);
   const stops = spec.map((c,i)=>`<stop offset="${(i/(spec.length-1)).toFixed(3)}" stop-color="${c}"/>`).join("");
-  const pd = `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+  const centre = `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+  const layers = BEAM_LAYERS[dark ? "dark" : "light"].map(([cls,w,fill,op,flt])=>
+    `<path class="arc-${cls}" d="${taperedBeamPath(x1,y1,cx,cy,x2,y2,w)}" style="fill:${fill==="GRAD" ? `url(#${id})` : fill};opacity:${op};filter:url(#${flt})"/>`).join("");
   const g = document.createElementNS("http://www.w3.org/2000/svg","g");
   g.setAttribute("class", "arc " + (dark ? "dark" : "light"));
+  // The tapered shapes are revealed along the curve by an animated mask stroke, so the beam still shoots
+  // out from the piece (slow start, accelerating into the target).
   g.innerHTML = `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" spreadMethod="reflect">${stops}
-      <animateTransform attributeName="gradientTransform" type="translate" from="0 0" to="${(dx*0.5).toFixed(1)} ${(dy*0.5).toFixed(1)}" dur="0.9s" repeatCount="indefinite"/></linearGradient></defs>
-    <path class="arc-halo" d="${pd}"/><path class="arc-prism" d="${pd}" stroke="url(#${id})"/><path class="arc-mid" d="${pd}"/><path class="arc-inner" d="${pd}"/><path class="arc-core" d="${pd}"/>`;
+      <animateTransform attributeName="gradientTransform" type="translate" from="0 0" to="${(dx*0.5).toFixed(1)} ${(dy*0.5).toFixed(1)}" dur="0.9s" repeatCount="indefinite"/></linearGradient>
+      <mask id="${id}m" maskUnits="userSpaceOnUse" x="-5000" y="-5000" width="10000" height="10000">
+        <path class="arc-reveal" d="${centre}" style="fill:none;stroke:#fff;stroke-width:44;stroke-linecap:round"/></mask></defs>
+    <g mask="url(#${id}m)">${layers}</g>`;
   svg.appendChild(g);
-  const paths = [...g.querySelectorAll("path")];
-  const L = paths[paths.length-1].getTotalLength();
-  paths.forEach(pth=>{
-    pth.style.strokeDasharray = `${L} ${L}`;
-    pth.style.strokeDashoffset = L;
-    // slow start, accelerating into the target
-    pth.animate([{ strokeDashoffset:L }, { strokeDashoffset:0 }], { duration:draw, delay, easing:"cubic-bezier(.7,0,.95,.45)", fill:"forwards" });
-  });
+  const reveal = g.querySelector(".arc-reveal");
+  const Lr = reveal.getTotalLength() + 44;          // extra so the round end clears the target fully
+  reveal.style.strokeDasharray = `${Lr} ${Lr}`;
+  reveal.style.strokeDashoffset = Lr;
+  reveal.animate([{ strokeDashoffset:Lr }, { strokeDashoffset:0 }], { duration:draw, delay, easing:"cubic-bezier(.7,0,.95,.45)", fill:"forwards" });
   const total = delay + draw + hold + fade;
   g.animate([{ opacity:1 }, { opacity:1, offset:(delay+draw+hold)/total }, { opacity:0 }], { duration:total, fill:"forwards" }).onfinish = ()=>g.remove();
   setTimeout(()=>{ if(g.isConnected) g.remove(); }, total+200);
