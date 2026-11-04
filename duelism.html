@@ -590,7 +590,13 @@
   .tray .hourglass{ font-size:12px; width:12px; height:12px; line-height:12px; }
   .tray .vpCol{ display:flex; flex-direction:row; gap:2px; }
   .tray .vpdot{ width:12px; height:12px; }
-  .tray.you{ outline:1px solid var(--gold); outline-offset:-1px; border-radius:8px; background:rgba(216,178,92,.10); }
+  /* Active-player frame drawn on a pseudo-element so it can reach 4px further up and down than the tray
+     itself (clearing the VP gems) without changing the tray's size or the layout around it. */
+  .tray.you{ outline:none; background:none; }
+  .tray.you::after{
+    content:""; position:absolute; inset:-4px 0; z-index:-1; pointer-events:none;
+    border:1px solid var(--gold); border-radius:9px; background:rgba(216,178,92,.10);
+  }
 
   .tray-group{ border-width:18px; border-image-width:18px; }
   .tray{ flex-direction:row; flex-wrap:wrap; justify-content:center; align-items:baseline; align-content:center; column-gap:4px; row-gap:2px; }
@@ -727,6 +733,13 @@
   #statsDock{ margin:0 0 2px; }
   .sideBtn.stoneBtn{ height:70px; min-width:0; }
   #multiplayerBtn{ white-space:nowrap; }
+  #aiThinking{ position:fixed; left:50%; top:calc(env(safe-area-inset-top,0px) + 10px); transform:translateX(-50%);
+    z-index:60; padding:6px 14px; border-radius:999px; background:rgba(20,16,24,.88); border:1px solid var(--gold);
+    color:var(--gold); font-size:13px; letter-spacing:.04em; pointer-events:none; opacity:0; transition:opacity .15s; }
+  #aiThinking.show{ opacity:1; animation:aiPulse 1.2s ease-in-out infinite; }
+  @keyframes aiPulse{ 0%,100%{ box-shadow:0 0 0 rgba(216,178,92,0); } 50%{ box-shadow:0 0 14px rgba(216,178,92,.55); } }
+  .modal .aiChoosing{ color:var(--gold); font-style:italic; margin-top:10px; }
+  .modal .opts button.aiPicked{ outline:3px solid #fff; outline-offset:2px; box-shadow:0 0 16px rgba(255,255,255,.7); }
 </style>
 </head>
 <body>
@@ -755,7 +768,7 @@
       <div class="tray" id="trayP1"><h2>Player 1</h2></div>
       <div class="tray" id="trayP2"><h2>Player 2</h2></div>
     </div>
-    <button class="stoneBtn sideBtn" id="multiplayerBtn" style="margin-top:16px;">Host / Join</button>
+    <button class="stoneBtn sideBtn" id="multiplayerBtn" style="margin-top:16px;">Multiplayer</button>
     <button class="stoneBtn sideBtn" id="saveLoadBtn" style="margin-top:8px;">Save / Load</button>
   </div>
 </div>
@@ -1363,8 +1376,9 @@ function resolveTile(unit){
   if(tile.kind==="yinyang"){
     const primaryTarget = unitsOf(opp).find(u=>u.color===tile.primary);
     const secondaryTarget = unitsOf(opp).find(u=>u.color===tile.secondary);
-    if(primaryTarget) damage(primaryTarget, 3, tile.primary);
-    if(secondaryTarget) damage(secondaryTarget, 1, tile.secondary);
+    // The landing piece is the source of the damage (its colour sets a defeat's VP colour), not the gems.
+    if(primaryTarget) damage(primaryTarget, 3, unit.color);
+    if(secondaryTarget) damage(secondaryTarget, 1, unit.color);
     logMsg(`Landed on a ${tile.anchor==="yin"?"Yin":"Yang"} tile: 3 damage to opponent's ${cw(tile.primary)} piece, 1 damage to opponent's ${cw(tile.secondary)} piece.`);
     endTurn();
     return;
@@ -1513,9 +1527,11 @@ function runNamedCard(name, unit){
       break;
     }
     case "Hate": {
-      const myUntapped = unitsOf(mover).filter(u=>!u.tapped && u!==unit);
+      // Any of the mover's untapped pieces — including the piece that just moved, when moving it
+      // tapped the last piece and the refresh untapped all three (matches the card: "one untapped piece per player").
+      const myUntapped = unitsOf(mover).filter(u=>!u.tapped);
       const oppUntapped = unitsOf(opp).filter(u=>!u.tapped);
-      askChoice("Hate", "Tap one of your other untapped pieces.",
+      askChoice("Hate", "Tap one of your untapped pieces.",
         (myUntapped.length? myUntapped : unitsOf(mover).filter(u=>u!==unit)).map(u=>({label:`${cw(u.color)} piece${u.tapped?" (already tapped)":""}`, value:u, color:COLOR_HEX[u.color]})),
         (myPick)=>{
           myPick.tapped = true;
@@ -1722,7 +1738,7 @@ function askChoice(title, desc, options, onPick, opts={}){
     modal.appendChild(cancelRow);
   }
   wrap.appendChild(modal);
-  attachPeekButton(overlay, wrap, options, opts);
+  if(!opts.noPeek) attachPeekButton(overlay, wrap, options, opts);
   positionModalNextToPeek(wrap);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
@@ -3623,14 +3639,47 @@ function showMultiplayer(entry){
   function renderChoice(){
     mpOnConnectionOpen = ()=>renderConnected();
     mpOnConnectionClosed = ()=>renderDisconnected();
+    const aiOn = typeof aiMode!=="undefined" && aiMode.enabled;
     modal.innerHTML = `
-      <h3>Host/Join a New Game</h3>
-      <p>Start a new room and send your friend the link or code — or join theirs by entering their 5-character code.</p>
+      <h3>Multiplayer</h3>
+      <p>Start a room and send a friend the link or code, join theirs with their 5-character code — or play against the computer.</p>
+      ${aiOn ? `<p style="color:var(--gold);">You're playing the computer (${AI_LEVEL_LABEL[aiMode.level]}) as Player ${aiMode.player===1?2:1}.</p>` : ``}
     `;
-    addOpts([
+    const btns = [
       { label:"Host a New Game", onClick: ()=>renderStart() },
       { label:"Join with a Code", onClick: ()=>renderJoinInput() },
-      { label:"Close", onClick: closeModal, secondary:true },
+      { label: aiOn ? "New Game vs Computer" : "Play vs Computer", onClick: ()=>renderComputerLevel() },
+    ];
+    if(aiOn) btns.push({ label:"Stop Playing Computer", onClick: ()=>{ aiStop(); closeModal(); } });
+    btns.push({ label:"Close", onClick: closeModal, secondary:true });
+    addOpts(btns);
+  }
+
+  function renderComputerLevel(){
+    modal.innerHTML = `
+      <h3>Play vs Computer</h3>
+      <p>Choose how strong the computer plays.</p>
+      <p style="font-size:12px; opacity:.75;"><b>Easy</b> — looks one turn ahead and makes mistakes.<br><b>Medium</b> — looks two turns ahead.<br><b>Hard</b> — thinks up to ~1.5s per move, several turns deep.</p>
+    `;
+    addOpts([
+      { label:"Easy", onClick: ()=>renderComputerSide("easy") },
+      { label:"Medium", onClick: ()=>renderComputerSide("medium") },
+      { label:"Hard", onClick: ()=>renderComputerSide("hard") },
+      { label:"Back", onClick: ()=>backTo(renderChoice), secondary:true },
+    ]);
+  }
+
+  function renderComputerSide(level){
+    const inRoom = typeof mpRoomCode!=="undefined" && mpRoomCode;
+    modal.innerHTML = `
+      <h3>Play vs Computer — ${AI_LEVEL_LABEL[level]}</h3>
+      <p>Which side do you want? Player 1 moves first; Player 2 starts with a minor VP.</p>
+      <p style="font-size:12px; opacity:.75;">This ends your current game${inRoom ? " and leaves your online room" : ""}.</p>
+    `;
+    addOpts([
+      { label:"Play as Player 1", onClick: ()=>{ closeModal(); aiStart(level, 1); } },
+      { label:"Play as Player 2", onClick: ()=>{ closeModal(); aiStart(level, 2); } },
+      { label:"Back", onClick: ()=>renderComputerLevel(), secondary:true },
     ]);
   }
 
@@ -4180,7 +4229,7 @@ function showRules(){
     <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or minor VP if they already hold that color).<br><br>
     <b>Minor VP:</b> 2 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
-  `, [{label:"Close", value:null}], ()=>{}, { hideCancel:true });
+  `, [{label:"Close", value:null}], ()=>{}, { hideCancel:true, noPeek:true });
 }
 
 /* ============================= INIT ============================= */
@@ -4392,5 +4441,943 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
   layoutMobile();
 })();
 </script>
+<!-- DUEL-AI:BEGIN -->
+<script id="duelEngineSrc">
+/* Duelism rules engine — pure, DOM-free, clone-able.
+ *
+ * Mirrors the rules implemented in the page's UI code (tryMove / resolveTile / runNamedCard / defeat /
+ * VP / endTurn) but with no popups, timers or animation: every point where the UI would pop up a choice
+ * is a "decision" that the caller answers by option index. Used by the computer opponent and by the
+ * differential tests in /engine that check it against the live game.
+ *
+ * Units are indexed 0..5 (P1 red,yellow,blue = 0..2; P2 red,yellow,blue = 3..5). Tiles are indexed r*4+c.
+ * Decision options are listed in exactly the order the UI shows its buttons.
+ */
+(function(root){
+"use strict";
+
+const MAJOR_VP = ["red","orange","yellow","green","blue","purple"];
+const NAMED = ["Light","Dark","Evil","Life","Good","Love","Hate","Death","Law","Chaos"]; // same order as NAMED_CARDS
+const YY = [
+  { anchor:"yin",  p:"red",    s:"yellow" }, { anchor:"yin",  p:"yellow", s:"blue" }, { anchor:"yin",  p:"blue",   s:"red" },
+  { anchor:"yang", p:"red",    s:"blue"   }, { anchor:"yang", p:"yellow", s:"red"  }, { anchor:"yang", p:"blue",   s:"yellow" },
+];
+
+function vpFor(a,b){
+  if(a===b) return a;
+  const pair = [a,b].sort().join("-");
+  return { "red-yellow":"orange", "blue-red":"purple", "blue-yellow":"green" }[pair];
+}
+const opp = p => p===1 ? 2 : 1;
+const IDX = [null, [0,1,2], [3,4,5]];
+
+/* ---------------------------------------------------------------- state */
+
+function clone(E){
+  const u = E.units, nu = new Array(6);
+  for(let i=0;i<6;i++){ const x=u[i]; nu[i]={ p:x.p, col:x.col, r:x.r, c:x.c, hp:x.hp, t:x.t }; }
+  return {
+    tiles: E.tiles,                                   // immutable, shared between clones
+    units: nu,
+    current: E.current,
+    vp: [null, { maj:E.vp[1].maj.slice(), min:E.vp[1].min }, { maj:E.vp[2].maj.slice(), min:E.vp[2].min }],
+    winner: E.winner,
+    light: [false, E.light[1], E.light[2]],
+    pconv: E.pconv.map(x=>({ p:x.p, ch:x.ch })),
+    extra: E.extra,
+  };
+}
+
+// A fresh game exactly like the page's newGame() (shuffle, anchors on Yin/Yang, P2 starts with a minor VP).
+function newGameState(rng){
+  rng = rng || Math.random;
+  const tiles = [];
+  NAMED.forEach(n=>tiles.push({ k:"n", name:n }));
+  YY.forEach(y=>tiles.push({ k:"y", anchor:y.anchor, p:y.p, s:y.s }));
+  for(let i=tiles.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); const t=tiles[i]; tiles[i]=tiles[j]; tiles[j]=t; }
+  const units = [];
+  [[1,"yin"],[2,"yang"]].forEach(([p,anchor])=>{
+    ["red","yellow","blue"].forEach(col=>{
+      const pos = tiles.findIndex(t=>t.k==="y" && t.anchor===anchor && t.p===col);
+      units.push({ p, col, r:Math.floor(pos/4), c:pos%4, hp:8, t:false });
+    });
+  });
+  const E = { tiles, units, current:1, vp:[null,{maj:[],min:0},{maj:[],min:1}], winner:0, light:[false,false,false], pconv:[], extra:false };
+  startTurn(E);
+  return E;
+}
+
+/* ---------------------------------------------------------------- helpers */
+
+function unitAt(E, r, c){ for(let i=0;i<6;i++){ const u=E.units[i]; if(u.r===r && u.c===c) return u; } return null; }
+function totalVP(E, p){ return E.vp[p].maj.length + E.vp[p].min; }
+function tileAt(E, r, c){ return E.tiles[r*4+c]; }
+function findTile(E, name){
+  const T = E.tiles;
+  if(T._idx===undefined){   // cache named-tile positions on the (immutable, shared) tiles array
+    const m = {}; for(let i=0;i<16;i++){ const t=T[i]; if(t.k==="n") m[t.name]=i; }
+    Object.defineProperty(T, "_idx", { value:m, enumerable:false });
+  }
+  const i = T._idx[name]; return i===undefined ? -1 : i;
+}
+
+function baseLegal(E, ui){
+  const u = E.units[ui];
+  if(u.t) return [];
+  // squares in u's row/column that are empty and not in the row/column of u's other pieces
+  const ids = IDX[u.p], U = E.units;
+  let rows = 0, cols = 0, occ = 0;
+  for(let k=0;k<3;k++){ const i=ids[k]; if(i===ui) continue; rows |= 1<<U[i].r; cols |= 1<<U[i].c; }
+  for(let i=0;i<6;i++) occ |= 1<<(U[i].r*4+U[i].c);
+  const out = [];
+  for(let c=0;c<4;c++){ if(c===u.c) continue; const sq=u.r*4+c; if(!(occ>>sq&1) && !(rows>>u.r&1) && !(cols>>c&1)) out.push(sq); }
+  for(let r=0;r<4;r++){ if(r===u.r) continue; const sq=r*4+u.c; if(!(occ>>sq&1) && !(rows>>r&1) && !(cols>>u.c&1)) out.push(sq); }
+  out.sort((a,b)=>a-b);
+  return out;
+}
+
+function canResolveLaw(E, p){ return E.vp[opp(p)].min >= 1 || E.vp[p].min === 0; }
+
+// Legal destination squares (r*4+c) for a unit, including the Chaos / Law restrictions.
+function legalMoves(E, ui){
+  let moves = baseLegal(E, ui);
+  if(moves.length===0) return moves;
+  const u = E.units[ui];
+  const chaos = findTile(E, "Chaos");
+  if(chaos>=0 && moves.indexOf(chaos)>=0){
+    const anyOther = IDX[u.p].some(i=>baseLegal(E,i).some(m=>m!==chaos));
+    if(anyOther) moves = moves.filter(m=>m!==chaos);
+  }
+  const law = findTile(E, "Law");
+  if(law>=0 && moves.indexOf(law)>=0){
+    const qualifies = totalVP(E,u.p) <= totalVP(E,opp(u.p));
+    if(!qualifies || !canResolveLaw(E,u.p)) moves = moves.filter(m=>m!==law);
+  }
+  return moves;
+}
+
+// Every legal (unit, destination) for the player whose turn it is.
+function allMoves(E){
+  const out = [];
+  IDX[E.current].forEach(ui=>{ legalMoves(E,ui).forEach(sq=>out.push({ ui, r:sq>>2, c:sq&3 })); });
+  return out;
+}
+
+function readyAll(E, p){
+  const ids = IDX[p];
+  if(ids.every(i=>E.units[i].t)) ids.forEach(i=>{ E.units[i].t = false; });
+}
+
+function heal(u, amt){ u.hp = Math.min(8, u.hp + amt); }
+function checkWin(E, p){ if(E.vp[p].maj.length>=6) E.winner = p; }
+
+function grantMinorVP(E, p, chooser){
+  const b = E.vp[p];
+  b.min += 1;
+  if(b.min>=2){ b.min -= 2; E.pconv.push({ p, ch: chooser || opp(p) }); }
+}
+function grantMajorVP(E, p, srcColor, chosenAff){
+  const vc = vpFor(srcColor, chosenAff);
+  const b = E.vp[p];
+  if(b.maj.indexOf(vc)>=0) grantMinorVP(E, p);
+  else { b.maj.push(vc); checkWin(E, p); }
+}
+function loseMinorVP(E, p){ if(E.vp[p].min>0){ E.vp[p].min -= 1; return true; } return false; }
+
+/* Damage: a generator because Good's defeat lets a player choose the VP colour (a decision). */
+function* damage(E, ui, amt, srcColor, o){
+  if(amt<=0) return 0;
+  const u = E.units[ui];
+  const before = u.hp;
+  u.hp = Math.max(0, u.hp - amt);
+  const applied = before - u.hp;
+  if(u.hp===0) yield* defeat(E, ui, Object.assign({ chosenAffinity: srcColor }, o||{}));
+  return applied;
+}
+
+function* defeat(E, ui, o){
+  const u = E.units[ui];
+  const winner = opp(u.p);
+  u.hp = (o.resetHP!==undefined) ? o.resetHP : 8;
+  if(o.chooseAffinityFor){
+    const chooser = o.chooseAffinityFor;
+    const missing = MAJOR_VP.filter(c=>E.vp[winner].maj.indexOf(c)<0);
+    if(missing.length===0){ grantMinorVP(E, winner, chooser); return; }
+    const k = yield { p: chooser, kind:"vpcolor", opts: missing };
+    E.vp[winner].maj.push(missing[k]);
+    checkWin(E, winner);
+  } else {
+    grantMajorVP(E, winner, u.col, o.chosenAffinity || u.col);
+  }
+}
+
+/* Turn start: a player with no legal move at all has tapped/untapped swapped, then carries on. */
+function startTurn(E){
+  if(E.winner) return;
+  const ids = IDX[E.current];
+  if(ids.every(i=>legalMoves(E,i).length===0)) ids.forEach(i=>{ E.units[i].t = !E.units[i].t; });
+}
+
+function* endTurn(E){
+  while(E.pconv.length){
+    const { p, ch } = E.pconv.shift();
+    const chooser = ch || opp(p);
+    const missing = MAJOR_VP.filter(c=>E.vp[p].maj.indexOf(c)<0);
+    if(missing.length===0) continue;
+    const k = yield { p: chooser, kind:"conversion", opts: missing };
+    E.vp[p].maj.push(missing[k]);
+    checkWin(E, p);
+  }
+  if(E.winner) return;
+  if(E.extra) E.extra = false; else E.current = opp(E.current);
+  startTurn(E);
+}
+
+/* ---------------------------------------------------------------- the turn */
+
+function* turn(E, ui, r, c){
+  const u = E.units[ui];
+  u.r = r; u.c = c;
+  u.t = true;
+  readyAll(E, u.p);
+  yield* resolveTile(E, ui);
+}
+
+function* resolveTile(E, ui){
+  const u = E.units[ui];
+  const mover = u.p, o = opp(mover);
+  const tile = tileAt(E, u.r, u.c);
+
+  if(E.light[mover]){
+    E.light[mover] = false;
+    for(const i of IDX[o]) yield* damage(E, i, 1, u.col);
+    yield* endTurn(E);
+    return;
+  }
+
+  if(tile.k==="y"){
+    const pi = IDX[o].find(i=>E.units[i].col===tile.p);
+    const si = IDX[o].find(i=>E.units[i].col===tile.s);
+    if(pi!==undefined) yield* damage(E, pi, 3, u.col);   // the landing piece is the damage source
+    if(si!==undefined) yield* damage(E, si, 1, u.col);
+    yield* endTurn(E);
+    return;
+  }
+
+  yield* named(E, tile.name, ui);
+}
+
+function* named(E, name, ui){
+  const u = E.units[ui];
+  const mover = u.p, o = opp(mover);
+  const mine = IDX[mover], theirs = IDX[o];
+
+  switch(name){
+    case "Light": {
+      for(const i of theirs) yield* damage(E, i, 1, u.col);
+      E.light[o] = true;
+      yield* endTurn(E);
+      break;
+    }
+    case "Dark": {
+      const choices = mine.filter(i=>i!==ui);
+      const k = yield { p:mover, kind:"dark", opts:choices };
+      const ch = E.units[choices[k]];
+      const targets = theirs.filter(i=>E.units[i].r===ch.r || E.units[i].c===ch.c);
+      if(targets.length){
+        const each = Math.floor(6/targets.length);
+        let rem = 6 - each*targets.length;
+        for(const t of targets){ let amt=each; if(rem>0){ amt++; rem--; } yield* damage(E, t, amt, ch.col); }
+      }
+      yield* damage(E, choices[k], 2, ch.col);
+      yield* endTurn(E);
+      break;
+    }
+    case "Evil": {
+      grantMinorVP(E, o);
+      const k1 = yield { p:o, kind:"evil1", opts:theirs.slice() };
+      const first = theirs[k1];
+      const second = theirs.filter(i=>i!==first);
+      const k2 = yield { p:mover, kind:"evil2", opts:second };
+      const sp = second[k2];
+      const fc = E.units[first].col, sc = E.units[sp].col;
+      yield* damage(E, first, 4, sc);
+      yield* damage(E, sp, 4, fc);
+      yield* endTurn(E);
+      break;
+    }
+    case "Life": {
+      const cap = mine.reduce((s,i)=>s + (8-E.units[i].hp), 0);
+      if(cap < 4){
+        E.extra = true;
+        yield* endTurn(E);
+      } else {
+        let remaining = 4;
+        while(true){
+          const pieces = mine.filter(i=>E.units[i].hp<8);
+          if(pieces.length===0 || remaining<=0) break;
+          const k = yield { p:mover, kind:"life", opts:pieces };
+          heal(E.units[pieces[k]], 1);
+          remaining--;
+        }
+        if(E.vp[mover].min > 0){
+          const k = yield { p:mover, kind:"lifeturn", opts:["yes","no"] };
+          if(k===0){ loseMinorVP(E, mover); E.extra = true; }
+        }
+        yield* endTurn(E);
+      }
+      break;
+    }
+    case "Good": {
+      const maxHP = Math.max(...theirs.map(i=>E.units[i].hp));
+      const tied = theirs.filter(i=>E.units[i].hp===maxHP);
+      let target;
+      if(tied.length>1){ const k = yield { p:o, kind:"goodtie", opts:tied.slice() }; target = tied[k]; }
+      else target = tied[0];
+      if(E.units[target].hp <= 4){
+        yield* damage(E, target, 4, u.col, { chooseAffinityFor:o });
+      } else {
+        yield* damage(E, target, 4, u.col);
+      }
+      yield* endTurn(E);
+      break;
+    }
+    case "Love": {
+      const sa = theirs.find(i=>E.units[i].col===u.col);
+      if(sa!==undefined){
+        const s = E.units[sa];
+        const mr=u.r, mc=u.c;
+        u.r = s.r; u.c = s.c;
+        s.r = mr; s.c = mc;
+        yield* resolveTile(E, ui);
+      } else {
+        yield* endTurn(E);
+      }
+      break;
+    }
+    case "Hate": {
+      const myUntapped = mine.filter(i=>!E.units[i].t);   // includes the mover if the refresh untapped it
+      const oppUntapped = theirs.filter(i=>!E.units[i].t);
+      const myOpts = myUntapped.length ? myUntapped : mine.filter(i=>i!==ui);
+      const k1 = yield { p:mover, kind:"hate1", opts:myOpts };
+      const myPick = myOpts[k1];
+      E.units[myPick].t = true;
+      readyAll(E, mover);
+      let oppPick = null;
+      if(oppUntapped.length){
+        const k2 = yield { p:mover, kind:"hate2", opts:oppUntapped };
+        oppPick = oppUntapped[k2];
+        E.units[oppPick].t = true;
+        readyAll(E, o);
+      }
+      const aff = [E.units[myPick].col];
+      if(oppPick!==null) aff.push(E.units[oppPick].col);
+      const targets = theirs.filter(i=>aff.indexOf(E.units[i].col)>=0);
+      if(targets.length){
+        const each = Math.floor(4/targets.length);
+        let rem = 4 - each*targets.length;
+        for(const t of targets){ let amt=each; if(rem>0){ amt++; rem--; } yield* damage(E, t, amt, u.col); }
+      }
+      yield* endTurn(E);
+      break;
+    }
+    case "Death": {
+      const minHP = Math.min(...theirs.map(i=>E.units[i].hp));
+      const tied = theirs.filter(i=>E.units[i].hp===minHP);
+      let target;
+      if(tied.length>1){ const k = yield { p:mover, kind:"deathtie", opts:tied.slice() }; target = tied[k]; }
+      else target = tied[0];
+      const pre = E.units[target].hp;
+      const willDefeat = pre>0 && pre<=4;
+      const beforeLen = E.vp[mover].maj.length;
+      const excess = willDefeat ? (4-pre) : 0;
+      yield* damage(E, target, 4, u.col, willDefeat ? { resetHP: 8-excess } : {});
+      if(willDefeat){
+        const b = E.vp[mover];
+        if(b.maj.length > beforeLen){ b.maj.pop(); grantMinorVP(E, mover); }
+        E.extra = true;
+      }
+      yield* endTurn(E);
+      break;
+    }
+    case "Law": {
+      const canGain = E.vp[mover].min === 0;
+      const canReduce = E.vp[o].min >= 1;
+      if(canGain && canReduce){
+        const k = yield { p:mover, kind:"law", opts:["gain","reduce"] };
+        if(k===0) grantMinorVP(E, mover); else loseMinorVP(E, o);
+      } else if(canGain){ grantMinorVP(E, mover); }
+      else if(canReduce){ loseMinorVP(E, o); }
+      yield* endTurn(E);
+      break;
+    }
+    case "Chaos": {
+      const others = mine.filter(i=>i!==ui);
+      const k = yield { p:mover, kind:"chaos", opts:others };
+      const a = E.units[ui], b = E.units[others[k]];
+      const sum = a.hp + b.hp, lo = Math.floor(sum/2), hi = Math.ceil(sum/2);
+      if(lo===hi){ a.hp = lo; b.hp = lo; }
+      else {
+        const k2 = yield { p:mover, kind:"chaossplit", opts:["a","b"] };
+        if(k2===0){ a.hp = hi; b.hp = lo; } else { a.hp = lo; b.hp = hi; }
+      }
+      E.extra = true;
+      yield* endTurn(E);
+      break;
+    }
+    default:
+      yield* endTurn(E);
+  }
+}
+
+/* ---------------------------------------------------------------- driver */
+
+// Plays unit `ui` to (r,c) from a copy of E0, answering decisions from `choices` (option indices, in order).
+// Returns { done:true, E } when the turn fully resolved, or { done:false, decision:{p,kind,opts}, E } at the
+// first decision that `choices` doesn't answer yet. E0 is never modified.
+function runTurn(E0, ui, r, c, choices){
+  choices = choices || [];
+  const E = clone(E0);
+  const g = turn(E, ui, r, c);
+  let k = 0, step = g.next();
+  while(!step.done){
+    if(k>=choices.length) return { done:false, decision:step.value, E };
+    step = g.next(choices[k++]);
+  }
+  return { done:true, E };
+}
+
+const api = { clone, newGameState, legalMoves, allMoves, runTurn, startTurn, totalVP, vpFor, opp, IDX, MAJOR_VP, NAMED, YY, tileAt, unitAt };
+if(typeof module!=="undefined" && module.exports) module.exports = api;
+root.DuelEngine = api;
+})(typeof globalThis!=="undefined" ? globalThis : this);
+
+</script>
+<script id="duelAiSrc">
+/* Duelism computer opponent: alpha-beta search over whole turns on top of the pure rules engine
+ * (duel-engine.js), with a weighted position evaluation whose weights are tuned offline by self-play
+ * (see /engine/tune.js). Every popup the UI would show is a "decision" node in the tree owned by the
+ * player who has to answer it, so e.g. Evil's opponent pick or Good's colour choice are searched as the
+ * right side (maximising for the AI's own decisions, minimising for the human's).
+ *
+ * v2: damage-efficiency scoring (piece-health value curve, fresh-colour kill targets, damage losing
+ * value as the game nears its end), kill-threat detection, a transposition table, and search
+ * extensions on knife-edge positions (a kill is on the board for the side to move).
+ */
+(function(root){
+"use strict";
+const DE = root.DuelEngine || (typeof require!=="undefined" ? require("./duel-engine.js") : null);
+const { runTurn, allMoves, legalMoves, opp, IDX, MAJOR_VP, vpFor } = DE;
+
+/* Evaluation weights (value to the side that has the feature, minus the same for the other side).
+ * d1..d8 are the value of each successive point of a piece's health (d1 = going from 0 to 1 HP ...
+ * d8 = 7 to 8), so their shape says whether damage is worth more concentrated on one piece or spread.
+ * Tuned offline by self-play — see tune2.js. */
+const DEFAULT_WEIGHTS = {
+  major: 100,      // each major VP
+  minor: 52.8,     // a minor VP (two convert into a major)
+  // value of each point of health, from the 1st (0->1 HP) to the 8th (7->8 HP). Big d5: being pushed
+  // into kill range (<=4) is what really hurts; the first point or two off a healthy piece costs little,
+  // so the computer prefers concentrating damage over spreading it.
+  d1: 8.69, d2: 4.2, d3: 7.69, d4: 5.82, d5: 23.35, d6: 11.63, d7: 5.02, d8: 3.11,
+  hpDecay: 0.55,   // health/damage counts for less as the leader nears 6 majors (unconverted damage scores nothing)
+  untapped: 2.43,  // each untapped piece (mobility / tempo)
+  light: 16.16,    // owning a pending Light follow-up
+  fresh: 4.64,     // an enemy piece at <=4 HP whose colour you still need (its defeat is a new major, not a dup)
+  killNow: 24.07,  // side to move can defeat this many enemy pieces with one move (fresh colours count full)
+  killNext: 8.77, // the side NOT to move threatens this (it can be answered, so worth less)
+  primary: 25,     // extra value of a PRIMARY major (red/yellow/blue): a primary only comes from same-colour
+                   // damage (red piece defeating a red piece), while each secondary has two source/victim
+                   // combinations — so primaries are the usual bottleneck (300 self-play games: the winner's
+                   // last colour was a primary 215 times vs a secondary 85).
+};
+const BIG = 1e6;
+const WKEYS = ["major","minor","d1","d2","d3","d4","d5","d6","d7","d8","hpDecay","untapped","light","fresh","killNow","killNext","primary"];
+
+// Health value table H[hp] from the per-point increments (cached per weights object).
+function hpTable(W){
+  if(W._H) return W._H;
+  const H = [0]; let s = 0;
+  for(let h=1; h<=8; h++){ s += W["d"+h]; H.push(s); }
+  Object.defineProperty(W, "_H", { value:H, enumerable:false, configurable:true });
+  return H;
+}
+
+function primCount(E, p){ let n=0; for(const c of E.vp[p].maj) if(c==="red"||c==="yellow"||c==="blue") n++; return n; }
+function hasMaj(E, p, col){ return E.vp[p].maj.indexOf(col) >= 0; }
+
+/* How many enemy pieces player p could defeat with a single move right now, each counted once at its
+ * best value: 1 if the defeat would give p a major colour it still needs, 0.5 if it only gives a
+ * duplicate (which becomes a minor). The VP colour mixes the damage source's colour with the victim's,
+ * and the source is the piece that moved (Yin/Yang, Light, Hate) — so which piece can reach which tile
+ * matters. Approximate on purpose — fast enough for every leaf. */
+function killThreat(E, p){
+  const o = opp(p), theirs = IDX[o], U = E.units;
+  const best = [0,0,0,0,0,0];
+  const val = (src, i)=> hasMaj(E, p, vpFor(src, U[i].col)) ? 0.5 : 1;
+  const hit = (i, v)=>{ if(v>best[i]) best[i]=v; };
+  for(const ui of IDX[p]){
+    const u = U[ui];
+    if(u.t) continue;
+    const ms = legalMoves(E, ui);
+    if(!ms.length) continue;
+    if(E.light[p]){ for(const i of theirs) if(U[i].hp<=1) hit(i, val(u.col,i)); continue; }
+    for(const sq of ms){
+      const t = E.tiles[sq];
+      if(t.k==="y"){
+        for(const i of theirs){ const x=U[i]; if((x.col===t.p && x.hp<=3) || (x.col===t.s && x.hp<=1)) hit(i, val(u.col,i)); }
+        continue;
+      }
+      switch(t.name){
+        case "Light": for(const i of theirs) if(U[i].hp<=1) hit(i, val(u.col,i)); break;
+        case "Good": { let mx=0; for(const i of theirs) mx=Math.max(mx,U[i].hp); if(mx<=4) for(const i of theirs) if(U[i].hp===mx) hit(i, 1); break; } // a needed colour, chosen by the victim's owner
+        case "Death": { let mn=9; for(const i of theirs) mn=Math.min(mn,U[i].hp); if(mn<=4) for(const i of theirs) if(U[i].hp===mn) hit(i, 0.75); break; } // minor VP + extra turn
+        case "Evil": for(const i of theirs) if(U[i].hp<=4) hit(i, 0.75); break;
+        case "Hate": for(const i of theirs) if(U[i].hp<=2) hit(i, val(u.col,i)); break;
+      }
+    }
+  }
+  return best[theirs[0]] + best[theirs[1]] + best[theirs[2]];
+}
+
+// Share of p's own piece colours whose damage would turn a defeat of `victim` into a major p still needs.
+function freshShare(E, p, victim){
+  let n = 0; for(const i of IDX[p]) if(!hasMaj(E, p, vpFor(E.units[i].col, victim.col))) n++;
+  return n/3;
+}
+
+function evaluate(E, me, W){
+  W = W || DEFAULT_WEIGHTS;
+  if(E.winner) return E.winner===me ? BIG : -BIG;
+  const you = opp(me), U = E.units, H = hpTable(W);
+  let s = 0;
+  s += W.major * (E.vp[me].maj.length - E.vp[you].maj.length);
+  s += W.minor * (E.vp[me].min - E.vp[you].min);
+  if(W.primary) s += W.primary * (primCount(E, me) - primCount(E, you));
+  const phase = Math.max(E.vp[1].maj.length, E.vp[2].maj.length) / 6;
+  const hpScale = Math.max(0, 1 - W.hpDecay*phase);
+  const mi = IDX[me], yi = IDX[you];
+  let hp = 0, fr = 0;
+  for(let k=0;k<3;k++){
+    const a = U[mi[k]], b = U[yi[k]];
+    hp += H[a.hp] - H[b.hp];
+    if(!a.t) s += W.untapped;
+    if(!b.t) s -= W.untapped;
+    if(b.hp<=4) fr += freshShare(E, me, b) * (5-b.hp)/4;
+    if(a.hp<=4) fr -= freshShare(E, you, a) * (5-a.hp)/4;
+  }
+  s += hpScale*hp + W.fresh*fr;
+  if(E.light[me]) s += W.light;
+  if(E.light[you]) s -= W.light;
+  if(W.killNow || W.killNext){
+    const toMove = E.current, other = opp(toMove);
+    const kNow = killThreat(E, toMove), kNext = killThreat(E, other);
+    const sign = toMove===me ? 1 : -1;
+    s += sign * (W.killNow*kNow - W.killNext*kNext);
+  }
+  return s;
+}
+
+// Compact position key for the transposition table (turn boundaries only, so no pending decisions).
+function keyOf(E){
+  const U = E.units; let k = "";
+  for(let i=0;i<6;i++){ const u=U[i]; k += String.fromCharCode(65 + u.r*4+u.c, 48 + u.hp + (u.t?16:0)); }
+  let m1=0, m2=0;
+  for(const c of E.vp[1].maj) m1 |= 1<<MAJOR_VP.indexOf(c);
+  for(const c of E.vp[2].maj) m2 |= 1<<MAJOR_VP.indexOf(c);
+  return k + String.fromCharCode(65+m1, 65+m2, 48+E.vp[1].min, 48+E.vp[2].min, 48+E.current + (E.light[1]?4:0) + (E.light[2]?8:0));
+}
+
+class Timeout {}
+const EXACT=0, LOWER=1, UPPER=2;
+
+function makeSearcher(me, W, deadline, opts){
+  opts = opts || {};
+  let nodes = 0;
+  const maxExt = opts.ext===undefined ? 2 : opts.ext;
+  const TT = opts.tt || new Map();
+  const tick = ()=>{ if((++nodes & 255)===0 && deadline && Date.now()>deadline) throw new Timeout(); };
+
+  function turnNode(E, depth, alpha, beta, ext){
+    tick();
+    if(E.winner) return (E.winner===me ? BIG + depth : -BIG - depth);
+    if(depth<=0){
+      // knife edge: the side to move can take a piece right now — look one more turn before judging
+      if(ext>0 && killThreat(E, E.current)>0) depth = 1, ext--;
+      else return evaluate(E, me, W);
+    }
+    const moves = allMoves(E);
+    if(moves.length===0) return evaluate(E, me, W);
+    const key = keyOf(E);
+    const e = TT.get(key);
+    let first = -1;
+    if(e){
+      if(e.d>=depth){
+        if(e.f===EXACT) return e.v;
+        if(e.f===LOWER && e.v>alpha) alpha = e.v;
+        else if(e.f===UPPER && e.v<beta) beta = e.v;
+        if(alpha>=beta) return e.v;
+      }
+      first = e.b;
+    }
+    const a0 = alpha, b0 = beta;
+    const maxi = E.current===me;
+    let best = maxi ? -Infinity : Infinity, bestI = -1;
+    const n = moves.length;
+    for(let j=-1;j<n;j++){
+      let i;
+      if(j===-1){ if(first<0 || first>=n) continue; i = first; }
+      else { if(j===first) continue; i = j; }
+      const v = resolveNode(E, moves[i], [], depth, alpha, beta, ext);
+      if(maxi){ if(v>best){ best=v; bestI=i; } if(best>alpha) alpha=best; }
+      else    { if(v<best){ best=v; bestI=i; } if(best<beta) beta=best; }
+      if(alpha>=beta) break;
+    }
+    if(TT.size > 400000) TT.clear();
+    TT.set(key, { d:depth, v:best, f: best<=a0 ? UPPER : (best>=b0 ? LOWER : EXACT), b:bestI });
+    return best;
+  }
+
+  function resolveNode(E0, m, choices, depth, alpha, beta, ext){
+    tick();
+    const res = runTurn(E0, m.ui, m.r, m.c, choices);
+    if(res.done) return turnNode(res.E, depth-1, alpha, beta, ext);
+    const d = res.decision;
+    const maxi = d.p===me;
+    let best = maxi ? -Infinity : Infinity;
+    for(let k=0;k<d.opts.length;k++){
+      const v = resolveNode(E0, m, choices.concat(k), depth, alpha, beta, ext);
+      if(maxi){ if(v>best) best=v; if(best>alpha) alpha=best; }
+      else    { if(v<best) best=v; if(best<beta) beta=best; }
+      if(alpha>=beta) break;
+    }
+    return best;
+  }
+  return { turnNode, resolveNode, nodes:()=>nodes, ext:maxExt };
+}
+
+function makeRng(seed){ let s=(seed||1)>>>0; return ()=>{ s=(s+0x6D2B79F5)>>>0; let t=s; t=Math.imul(t^t>>>15,t|1); t^=t+Math.imul(t^t>>>7,t|61); return ((t^t>>>14)>>>0)/4294967296; }; }
+
+/* Pick the move for the side to move in E.
+ * opts: { depth, timeMs, maxDepth, W, noise, rng, ext }   depth fixed, or timeMs for iterative deepening.
+ * noise: 0..1 — chance of a (softly) worse move, used for easier levels. */
+function chooseMove(E, opts){
+  opts = opts || {};
+  const me = E.current, W = opts.W || DEFAULT_WEIGHTS, rng = opts.rng || Math.random;
+  const moves = allMoves(E);
+  if(moves.length===0) return null;
+  if(moves.length===1) return { move:moves[0], value:0, depth:0 };
+  const deadline = opts.timeMs ? Date.now() + opts.timeMs : 0;
+  const maxDepth = opts.timeMs ? (opts.maxDepth || 12) : (opts.depth || 2);
+  const S = makeSearcher(me, W, deadline, opts);
+  let scored = moves.map(m=>({ m, v:0 }));
+  let reached = 0;
+  for(let depth=1; depth<=maxDepth; depth++){
+    try{
+      const cur = [];
+      let alpha = -Infinity;
+      const order = scored.slice().sort((a,b)=>b.v-a.v);   // best-first from the previous iteration
+      for(const sm of order){
+        const v = S.resolveNode(E, sm.m, [], depth, alpha - 1e-9, Infinity, S.ext);
+        cur.push({ m:sm.m, v });
+        if(v>alpha) alpha = v;
+      }
+      scored = cur; reached = depth;
+      if(scored.some(x=>x.v>=BIG)) break;      // found a forced win
+    }catch(e){ if(e instanceof Timeout) break; throw e; }
+  }
+  scored.sort((a,b)=>b.v-a.v);
+  let pick = scored[0];
+  if(opts.noise>0 && rng()<opts.noise){
+    const pool = scored.slice(0, Math.max(2, Math.ceil(scored.length*0.6)));
+    pick = pool[Math.floor(rng()*pool.length)];
+  } else {
+    const ties = scored.filter(x=>Math.abs(x.v - scored[0].v) < 1e-9);
+    pick = ties[Math.floor(rng()*ties.length)];
+  }
+  return { move:pick.m, value:pick.v, depth:reached, nodes:S.nodes() };
+}
+
+/* Answer one of the AI's own decisions: E0 = state at the start of the turn, m = the move in progress,
+ * choices = option indices answered so far (by either player). Returns the best option index. */
+function chooseDecision(E0, m, choices, opts){
+  opts = opts || {};
+  const res = runTurn(E0, m.ui, m.r, m.c, choices);
+  if(res.done) return 0;
+  const d = res.decision, me = d.p, W = opts.W || DEFAULT_WEIGHTS;
+  if(d.opts.length===1) return 0;
+  const deadline = opts.timeMs ? Date.now() + opts.timeMs : 0;
+  const maxDepth = opts.timeMs ? (opts.maxDepth || 10) : (opts.depth || 2);
+  const S = makeSearcher(me, W, deadline, opts);
+  let bestK = 0;
+  for(let depth=1; depth<=maxDepth; depth++){
+    try{
+      let bk = 0, bv = -Infinity;
+      for(let k=0;k<d.opts.length;k++){
+        const v = S.resolveNode(E0, m, choices.concat(k), depth, -Infinity, Infinity, S.ext);
+        if(v>bv){ bv=v; bk=k; }
+      }
+      bestK = bk;
+    }catch(e){ if(e instanceof Timeout) break; throw e; }
+  }
+  if(opts.noise>0 && (opts.rng||Math.random)()<opts.noise) return Math.floor((opts.rng||Math.random)()*d.opts.length);
+  return bestK;
+}
+
+const LEVELS = {
+  easy:   { depth:1, noise:0.35 },
+  medium: { depth:2, noise:0.08 },
+  hard:   { timeMs:1400, maxDepth:12, noise:0 },
+};
+
+const api = { DEFAULT_WEIGHTS, WKEYS, evaluate, killThreat, chooseMove, chooseDecision, makeRng, LEVELS };
+if(typeof module!=="undefined" && module.exports) module.exports = api;
+root.DuelAI = api;
+})(typeof globalThis!=="undefined" ? globalThis : this);
+
+</script>
+<script id="duelAiUi">
+/* ===================== COMPUTER OPPONENT (UI glue) =====================
+ * The rules engine (DuelEngine) mirrors each move: at every move we snapshot the board into engine
+ * form, and every popup answer (human or computer) is recorded as an option index. Asking the
+ * engine "what's the next decision of this move?" tells us who has to answer the popup that the
+ * UI is about to show — if it's the computer, it answers itself instead of showing buttons.
+ */
+const aiMode = { enabled:false, player:2, level:"medium" };
+let aiMirror = null;   // { S0, mv:{ui,r,c}, choices:[], mover, broken }
+let aiToken = 0;       // bumped on new game / undo / stop so stale timers do nothing
+
+const AI_LEVEL_LABEL = { easy:"Easy", medium:"Medium", hard:"Hard" };
+const AI_MOVE_OPTS = {
+  easy:   { depth:1, noise:0.35, ext:0 },
+  medium: { depth:2, noise:0.08, ext:1 },
+  hard:   { timeMs:1400, maxDepth:14, ext:2 },
+};
+const AI_DECISION_OPTS = {
+  easy:   { depth:1, noise:0.35, ext:0 },
+  medium: { depth:2, noise:0.08, ext:1 },
+  hard:   { timeMs:700, maxDepth:12, ext:2 },
+};
+
+// The search runs in a background worker (built from the two inlined engine scripts) so the page
+// keeps animating while the computer thinks; falls back to running inline if workers are blocked.
+let aiWorker = null, aiReqSeq = 0;
+function aiGetWorker(){
+  if(aiWorker!==null) return aiWorker;
+  try{
+    const src = document.getElementById("duelEngineSrc").textContent + "\n" + document.getElementById("duelAiSrc").textContent +
+      "\nonmessage=function(e){ var d=e.data, r=null; try{ r = d.type==='move' ? DuelAI.chooseMove(d.S, d.opts) : DuelAI.chooseDecision(d.S, d.mv, d.choices, d.opts); }catch(err){ r={error:String(err)}; } postMessage({id:d.id, r:r}); };";
+    aiWorker = new Worker(URL.createObjectURL(new Blob([src], {type:"text/javascript"})));
+    aiWorker.onerror = ()=>{ aiWorker = false; };
+  }catch(err){ aiWorker = false; }
+  return aiWorker;
+}
+function aiComputeSync(req){
+  return req.type==="move" ? DuelAI.chooseMove(req.S, req.opts) : DuelAI.chooseDecision(req.S, req.mv, req.choices, req.opts);
+}
+function aiCompute(req){
+  return new Promise(resolve=>{
+    const w = aiGetWorker();
+    if(!w){ let r=null; try{ r = aiComputeSync(req); }catch(e){ console.error(e); } resolve(r); return; }
+    const id = ++aiReqSeq;
+    let done = false;
+    const finish = (r)=>{ if(done) return; done = true; w.removeEventListener("message", onMsg); resolve(r); };
+    const onMsg = (e)=>{ if(e.data && e.data.id===id){
+      if(e.data.r && e.data.r.error){ let r=null; try{ r = aiComputeSync(req); }catch(_){} finish(r); } else finish(e.data.r); } };
+    w.addEventListener("message", onMsg);
+    // safety net: if the worker never answers, compute inline
+    setTimeout(()=>{ if(!done){ let r=null; try{ r = aiComputeSync(req); }catch(_){} finish(r); } }, 8000);
+    try{ w.postMessage(Object.assign({ id }, req)); }catch(err){ aiWorker = false; let r=null; try{ r = aiComputeSync(req); }catch(_){} finish(r); }
+  });
+}
+
+function aiToEngine(){
+  return {
+    tiles: state.board.flat().map(t=> t.kind==="named" ? {k:"n",name:t.card.name} : {k:"y",anchor:t.anchor,p:t.primary,s:t.secondary}),
+    units: state.units.map(u=>({p:u.player,col:u.color,r:u.r,c:u.c,hp:u.hp,t:!!u.tapped})),
+    current: state.current,
+    vp: [null,{maj:state.vp[1].major.slice(),min:state.vp[1].minor},{maj:state.vp[2].major.slice(),min:state.vp[2].minor}],
+    winner: state.winner||0,
+    light: [false,!!state.lightPending[1],!!state.lightPending[2]],
+    pconv: (state.pendingMinorConversions||[]).map(x=>({p:x.player,ch:x.chooser})),
+    extra: false,
+  };
+}
+
+function aiSetThinking(on, text){
+  let el = document.getElementById("aiThinking");
+  if(!el){
+    el = document.createElement("div"); el.id = "aiThinking";
+    document.body.appendChild(el);
+  }
+  el.textContent = text || "Computer is thinking…";
+  el.classList.toggle("show", !!on);
+}
+
+function aiIsComputersTurn(){
+  return aiMode.enabled && state && !state.winner && state.current===aiMode.player;
+}
+
+function aiSchedule(){
+  if(!aiIsComputersTurn()) return;
+  const t = aiToken;
+  setTimeout(()=>{ if(t===aiToken) aiPlay(t); }, 450);
+}
+
+function aiPlay(t){
+  if(!aiIsComputersTurn()) return;
+  // wait for any open popup (e.g. a notice the human is reading) before moving
+  if(document.getElementById("modalRoot").children.length){ setTimeout(()=>{ if(t===aiToken) aiPlay(t); }, 400); return; }
+  aiSetThinking(true);
+  const started = Date.now();
+  aiCompute({ type:"move", S:aiToEngine(), opts:Object.assign({ W:DuelAI.DEFAULT_WEIGHTS }, AI_MOVE_OPTS[aiMode.level]) }).then(res=>{
+    // keep the "thinking" pill up for at least a moment so it doesn't just flicker
+    setTimeout(()=>aiAfterThink(t, res), Math.max(0, 450 - (Date.now()-started)));
+  });
+}
+
+function aiAfterThink(t, res){
+  {
+    aiSetThinking(false);
+    if(t!==aiToken || !aiIsComputersTurn()) return;
+    if(!res){
+      // no legal move even after the tapped/untapped swap — pass rather than hang
+      logMsg(`Player ${state.current} (computer) has no legal moves and passes.`);
+      state.current = opponentOf(state.current);
+      startTurnLoop();
+      return;
+    }
+    const unit = state.units[res.move.ui], r = res.move.r, c = res.move.c;
+    selectedUnit = unit; pendingDest = null; render();          // show the piece's legal moves
+    setTimeout(()=>{
+      if(t!==aiToken || selectedUnit!==unit || !aiIsComputersTurn()) return;
+      pendingDest = { r, c }; renderBoard();                     // outline the chosen space
+      setTimeout(()=>{
+        if(t!==aiToken || !aiIsComputersTurn() || !legalMovesFor(unit).some(m=>m.r===r && m.c===c)) return;
+        pendingDest = null; selectedUnit = null;
+        preMoveSnapshot = JSON.stringify(state);
+        tryMove(unit, r, c);
+      }, 650);
+    }, 650);
+  }
+}
+
+// ---- wrap the existing game functions ----
+(function(){
+  const _isMy = isMyTurnOrLocal;
+  isMyTurnOrLocal = function(){
+    if(aiIsComputersTurn()) return false;
+    return _isMy();
+  };
+
+  const _tryMove = tryMove;
+  tryMove = function(unit, r, c){
+    if(aiMode.enabled && !state.winner){
+      const ui = state.units.indexOf(unit);
+      if(ui>=0 && legalMovesFor(unit).some(m=>m.r===r && m.c===c)){
+        aiMirror = { S0:aiToEngine(), mv:{ui,r,c}, choices:[], mover:state.current, broken:false };
+      }
+    }
+    return _tryMove(unit, r, c);
+  };
+
+  const _askChoice = askChoice;
+  askChoice = function(title, desc, options, onPick, opts={}){
+    const mirror = aiMirror;
+    if(!aiMode.enabled || !mirror || mirror.broken || opts.noPeek) return _askChoice(title, desc, options, onPick, opts);
+    let d = null;
+    try{
+      const res = DuelEngine.runTurn(mirror.S0, mirror.mv.ui, mirror.mv.r, mirror.mv.c, mirror.choices);
+      if(!res.done) d = res.decision;
+    }catch(err){ console.error(err); }
+    if(!d || d.opts.length!==options.length){ mirror.broken = true; mirror.why = {title, d, n:options.length, choices:mirror.choices.slice(), S0:mirror.S0, mv:mirror.mv}; return _askChoice(title, desc, options, onPick, opts); }
+
+    if(d.p===aiMode.player){
+      // Computer's decision: show the popup read-only, highlight its pick, then continue.
+      const t = aiToken;
+      _askChoice(title, desc, options, ()=>{}, Object.assign({}, opts, { hideCancel:true }));
+      const root = document.getElementById("modalRoot");
+      const modal = root.querySelector(".modal");
+      if(modal){ modal.style.pointerEvents = "none"; const p = document.createElement("p"); p.className = "aiChoosing"; p.textContent = "Computer is choosing…"; modal.appendChild(p); }
+      setTimeout(()=>{
+        if(t!==aiToken || mirror!==aiMirror) return;
+        aiCompute({ type:"decision", S:mirror.S0, mv:mirror.mv, choices:mirror.choices.slice(), opts:Object.assign({ W:DuelAI.DEFAULT_WEIGHTS }, AI_DECISION_OPTS[aiMode.level]) }).then(kk=>{
+        if(t!==aiToken || mirror!==aiMirror) return;
+        const k = (typeof kk==="number" && kk>=0 && kk<options.length) ? kk : 0;
+        const btns = root.querySelectorAll(".opts button");
+        if(btns[k]) btns[k].classList.add("aiPicked");
+        const note = root.querySelector(".aiChoosing"); if(note) note.textContent = "Computer chose: " + btns[k]?.textContent;
+        setTimeout(()=>{
+          if(t!==aiToken || mirror!==aiMirror) return;
+          mirror.choices.push(k);
+          root.innerHTML = ""; clearPeekHighlights(); resetPeekButton();
+          onPick(options[k].value);
+          render();
+        }, 900);
+        });
+      }, 500);
+      return;
+    }
+
+    // Human's decision: normal popup, but record which option they picked.
+    const o2 = Object.assign({}, opts);
+    if(mirror.mover===aiMode.player) o2.hideCancel = true;   // can't undo the computer's move
+    return _askChoice(title, desc, options, (v)=>{
+      const k = options.findIndex(o=>o.value===v);
+      if(mirror===aiMirror){ if(k<0) mirror.broken = true; else mirror.choices.push(k); }
+      onPick(v);
+    }, o2);
+  };
+
+  const _undo = undoLastMoveAndReset;
+  undoLastMoveAndReset = function(){ aiMirror = null; aiToken++; return _undo.apply(this, arguments); };
+
+  const _handoff = markTurnHandoff;
+  markTurnHandoff = function(){
+    const out = _handoff.apply(this, arguments);
+    aiMirror = null;
+    aiToken++;            // a new turn: any timer left over from an earlier turn is now stale
+    aiSchedule();
+    return out;
+  };
+
+  const _newGame = newGame;
+  newGame = function(){ aiToken++; aiMirror = null; aiSetThinking(false); aiClearModal(); return _newGame.apply(this, arguments); };
+
+  const _applyLoaded = applyLoadedState;
+  applyLoadedState = function(){ aiToken++; aiMirror = null; aiClearModal(); const out = _applyLoaded.apply(this, arguments); aiSchedule(); return out; };
+
+  // Starting or joining an online game turns the computer off.
+  const _host = mpHostRoom;
+  mpHostRoom = function(){ aiStop(); return _host.apply(this, arguments); };
+  const _join = mpJoinRoom;
+  mpJoinRoom = function(){ aiStop(); return _join.apply(this, arguments); };
+})();
+
+// Drop a popup the computer was in the middle of answering (its timers are now stale).
+function aiClearModal(){
+  const root = document.getElementById("modalRoot");
+  if(root && root.querySelector(".modal") && root.querySelector(".modal").style.pointerEvents==="none"){
+    root.innerHTML = ""; clearPeekHighlights(); resetPeekButton();
+  }
+}
+
+function aiStop(){
+  if(!aiMode.enabled) return;
+  aiMode.enabled = false; aiToken++; aiMirror = null; aiSetThinking(false); aiClearModal();
+  logMsg("Computer opponent turned off.");
+  render();
+}
+
+async function aiStart(level, humanPlayer){
+  if(typeof mpRoomCode!=="undefined" && mpRoomCode){ try{ await mpLeaveRoom(); }catch(_){} }
+  aiMode.enabled = true; aiMode.level = level; aiMode.player = humanPlayer===1 ? 2 : 1;
+  newGame();
+  logMsg(`New game vs the computer (${AI_LEVEL_LABEL[level]}). You are Player ${humanPlayer}.`);
+  render();
+}
+
+</script>
+<!-- DUEL-AI:END -->
 </body>
 </html>
