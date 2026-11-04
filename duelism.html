@@ -740,6 +740,23 @@
   @keyframes aiPulse{ 0%,100%{ box-shadow:0 0 0 rgba(216,178,92,0); } 50%{ box-shadow:0 0 14px rgba(216,178,92,.55); } }
   .modal .aiChoosing{ color:var(--gold); font-style:italic; margin-top:10px; }
   .modal .opts button.aiPicked{ outline:3px solid #fff; outline-offset:2px; box-shadow:0 0 16px rgba(255,255,255,.7); }
+  /* The secondary-colour gem images are tall (≈105×181) with the gem drawn below centre, so a centred
+     "cover" crop sat them ~10% of a gem lower than the square primary images. Shift their crop to centre. */
+  .vpdot[title="orange"], .vpdot[title="green"], .vpdot[title="purple"]{ background-position:50% 64%; }
+  /* App-like text: no text selection, no long-press callout, no tap flash. Besides tidier taps, this
+     stops Chrome on Android's "Touch to Search" (tapping a word pops up a Google search), which only
+     fires on selectable text. Places you type or copy from (join code, save/load codes) stay selectable. */
+  html, body{ -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
+  input, textarea, [contenteditable]{ -webkit-user-select:text; user-select:text; -webkit-touch-callout:default; }
+  /* Round peek button sits on the seam between the board's bottom centre and the tray. Popups rest on
+     it by their bottom edge (the button straddles that edge), so their content gets extra bottom room. */
+  .peek-anchor, .peek-anchor.active, .peek-anchor.active:hover{
+    width:40px; height:40px; border-radius:50%; border:1px solid rgba(216,178,92,.75);
+    transform:translate(-50%,-50%) !important; font-size:18px; box-shadow:0 2px 8px rgba(0,0,0,.45);
+    transition:opacity .2s ease;
+  }
+  .peek-anchor.active.on{ opacity:.85; background:var(--gold); color:#141018; border-color:var(--gold); box-shadow:0 0 16px rgba(216,178,92,.7); }
+  body.peek-on-deck .modal-wrap > .modal{ padding-bottom:36px; }
 </style>
 </head>
 <body>
@@ -4282,33 +4299,48 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
 
   window.fitScaleWrap = function(){};              // desktop 90% trick not used here
   // Centre choice popups over the board (clamped to the screen) instead of the whole viewport.
+  // Anchor line: the seam between the board's bottom centre and the stats tray. The peek button is
+  // centred on it, and every popup rests on it by its bottom edge, growing upward — but never taller
+  // than the board (its top stops at the board's top edge; longer content scrolls inside the box).
+  function popupAnchor(){
+    const bd = document.getElementById("board"), dock = document.getElementById("statsDock");
+    if(!bd) return { x: window.innerWidth/2, y: window.innerHeight/2, top: 8 };
+    const r = bd.getBoundingClientRect();
+    const below = dock ? dock.getBoundingClientRect().top : r.bottom;
+    return { x: Math.round(r.left + r.width/2), y: Math.round((r.bottom + below)/2), top: Math.round(r.top) };
+  }
   window.positionModalNextToPeek = function(wrap){
+    const a = popupAnchor();
+    const maxH = Math.max(120, a.y - a.top);
     wrap.style.position = "fixed";
     wrap.style.left = "50%";
     wrap.style.transform = "translateX(-50%)";
     wrap.style.width = "94%";
     wrap.style.maxWidth = "480px";
     wrap.style.margin = "0";
-    wrap.style.visibility = "hidden";
-    requestAnimationFrame(()=>{
-      const bd = document.getElementById("board");
-      if(!bd){ wrap.style.visibility = ""; return; }
-      const b = bd.getBoundingClientRect();
-      const h = wrap.offsetHeight;
-      let top = b.top + b.height/2 - h/2;
-      top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
-      wrap.style.top = top + "px";
-      wrap.style.visibility = "";
-    });
+    wrap.style.top = "auto";
+    wrap.style.bottom = (window.innerHeight - a.y) + "px";
+    wrap.style.maxHeight = maxH + "px";
+    wrap.style.display = "flex";
+    wrap.style.flexDirection = "column";
+    wrap.style.justifyContent = "flex-end";
+    wrap.style.visibility = "";
+    const fit = ()=>{
+      const m = wrap.querySelector(".modal");
+      if(m){ m.style.maxHeight = maxH + "px"; m.style.overflowY = "auto"; m.style.boxSizing = "border-box"; }
+    };
+    fit(); requestAnimationFrame(fit);
+    positionPeekButton();
   };
   window.positionPeekButton = function(){
     const peekBtn = document.getElementById("peekAnchor");
-    const dock = document.getElementById("statsDock");
-    if(!peekBtn || !dock) return;
-    const r = dock.getBoundingClientRect();
-    peekBtn.style.left = Math.round(r.left + r.width/2) + "px";
-    peekBtn.style.top = Math.round(r.top) + "px";
+    if(!peekBtn) return;
+    const a = popupAnchor();
+    peekBtn.style.left = a.x + "px";
+    peekBtn.style.top = a.y + "px";
   };
+
+
 
   // Peek button: press-and-hold with a finger (pointer events), instead of mouse hover.
   window.attachPeekButton = function(overlay, wrap, options, opts){
@@ -4321,10 +4353,12 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     if(!peekBtn) return;
     resetPeekButton();
     let peeking = false;
+    peekBtn._wrap = wrap; peekBtn._overlay = overlay;
     const setPeek = (on)=>{
       peeking = on;
       overlay.classList.toggle("peeking", on);
       peekBtn.classList.toggle("on", on);
+      positionPeekButton();
       applyPeekHighlights(impactCells, choiceCells, destCells);   // markers stay on whether the popup is up or peeked away
     };
     // Tap to toggle: the finger can lift and the board stays visible until the tab is tapped again.
@@ -4339,6 +4373,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       peekBtn.removeEventListener("click", onTap);
       document.body.classList.remove("peek-on-deck");
       peekBtn.classList.remove("active", "on");
+      peekBtn._wrap = null; peekBtn._overlay = null;
       clearPeekHighlights();
       overlay.classList.remove("peeking");
     };
