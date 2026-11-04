@@ -766,8 +766,12 @@
   .peek-anchor.on .eye-pupil{ fill:#141018; }
   .peek-anchor.on .eye-svg{ filter:drop-shadow(0 0 7px rgba(216,178,92,.75)); }
   body.peek-on-deck .modal-wrap > .modal{ padding-bottom:28px; }
-  /* Board nudged 12px up (right under the title) so the peek eye sits cleanly in the gap above the tray. */
-  #boardBox{ margin-top:-12px; margin-bottom:12px; }
+  /* Board sits right under the title. The tray and menu buttons rest against it normally; while a
+     popup with the peek eye is open they slide down 12px to open an 18px slot for the eye. */
+  #boardBox{ margin-top:-12px; margin-bottom:0; }
+  #statsDock, #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ transition:transform .25s ease; }
+  body.peek-on-deck #statsDock, body.peek-on-deck #newGameBtn, body.peek-on-deck #optionsBtn,
+  body.peek-on-deck #multiplayerBtn, body.peek-on-deck #saveLoadBtn{ transform:translateY(12px); }
 </style>
 </head>
 <body>
@@ -4322,7 +4326,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     if(!bd) return { x: window.innerWidth/2, y: window.innerHeight/2, top: 8 };
     const r = bd.getBoundingClientRect();
     const below = dock ? dock.getBoundingClientRect().top : r.bottom;
-    return { x: Math.round(r.left + r.width/2), y: Math.round((r.bottom + below)/2), top: Math.round(r.top) };   // eye centred in the board–tray gap
+    return { x: Math.round(r.left + r.width/2), y: Math.round(r.bottom) + 9, top: Math.round(r.top) };   // eye centred in the 18px slot the tray slides open
   }
   window.positionModalNextToPeek = function(wrap){
     const a = popupAnchor();
