@@ -771,13 +771,23 @@
   .peek-anchor.on .eye-iris{ stroke:#141018; }
   .peek-anchor.on .eye-pupil{ fill:#141018; }
   .peek-anchor.on .eye-svg{ filter:drop-shadow(0 0 7px rgba(216,178,92,.75)); }
-  body.peek-on-deck .modal-wrap > .modal{ padding-bottom:28px; }
+  body.peek-on-deck .modal-wrap > .modal{ padding-top:24px; padding-bottom:18px; }
   /* Board sits right under the title. The tray and menu buttons rest against it normally; while a
      popup with the peek eye is open they slide down 12px to open an 18px slot for the eye. */
-  #boardBox{ margin-top:-12px; margin-bottom:0; }
-  #statsDock, #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ transition:transform .25s ease; }
-  body.peek-on-deck #statsDock, body.peek-on-deck #newGameBtn, body.peek-on-deck #optionsBtn,
-  body.peek-on-deck #multiplayerBtn, body.peek-on-deck #saveLoadBtn{ transform:translateY(12px); }
+  /* Order, top to bottom: title, stats tray, menu buttons, then the board at the bottom of the screen
+     (the whole stack rests on the bottom; any spare height sits above it — see layoutMobile). While a
+     popup is open, everything above the board slides up 12px, opening an 18px slot over the board for
+     the peek eye; popups hang from the eye by their top edge, over the board. */
+  h1.trayColTitle{ order:0; } .turnInfo{ order:1; }
+  #statsDock{ order:2; }
+  #newGameBtn{ order:3; } #optionsBtn{ order:4; } #multiplayerBtn{ order:5; } #saveLoadBtn{ order:6; }
+  #boardBox{ order:8; margin-top:0; margin-bottom:0; }
+  h1.trayColTitle, .turnInfo, #statsDock, #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ transition:transform .25s ease; }
+  body.peek-on-deck h1.trayColTitle, body.peek-on-deck .turnInfo, body.peek-on-deck #statsDock, body.peek-on-deck #newGameBtn,
+  body.peek-on-deck #optionsBtn, body.peek-on-deck #multiplayerBtn, body.peek-on-deck #saveLoadBtn{ transform:translateY(-12px); }
+  /* single OK / Cancel / Close buttons run full width along the bottom, like the option lists */
+  .modal .cancelrow{ text-align:center; display:flex; flex-direction:column; gap:8px; margin-top:14px; }
+  .modal .cancelrow button{ width:100%; padding:10px 12px; }
   /* Damage arcs (see drawDamageArc). Each beam is stacked layers — core, inner glow, coloured rim,
      wide halo — each wider and fainter, so it fades gently from the centre outward.
      Player 1 (white): white core, faint pastel-prism rim. Player 2 (black, "Taken"): black core with a
@@ -2352,7 +2362,7 @@ function askChoice(title, desc, options, onPick, opts={}){
     modal.appendChild(cancelRow);
   }
   wrap.appendChild(modal);
-  if(!opts.noPeek) attachPeekButton(overlay, wrap, options, opts);
+  attachPeekButton(overlay, wrap, options, opts);
   positionModalNextToPeek(wrap);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
@@ -2421,6 +2431,7 @@ function showWinModal(player){
   row.appendChild(newGameBtn); row.appendChild(closeBtn);
   modal.appendChild(row);
   wrap.appendChild(modal);
+  attachPeekButton(overlay, wrap, [], {});
   positionModalNextToPeek(wrap);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
@@ -4625,6 +4636,7 @@ mpOnLoadRequest = function(loaded){
   wrap.appendChild(modal);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
+  attachPeekButton(overlay, wrap, [], {});
   positionModalNextToPeek(wrap);
 };
 
@@ -4822,6 +4834,7 @@ function showOptions(){
   modal.appendChild(col);
 
   wrap.appendChild(modal);
+  positionModalNextToPeek(wrap);
   overlay.appendChild(wrap);
   root.appendChild(overlay);
 
@@ -4874,7 +4887,7 @@ function showRules(){
     <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or minor VP if they already hold that color).<br><br>
     <b>Minor VP:</b> 2 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
-  `, [{label:"Close", value:null}], ()=>{}, { hideCancel:true, noPeek:true });
+  `, [{label:"Close", value:null}], ()=>{}, { hideCancel:true });
 }
 
 /* ============================= INIT ============================= */
@@ -4926,9 +4939,10 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       // Short screens: if the whole game (title, board, tray, buttons) is taller than the screen, shrink
       // all of it evenly so it fits without scrolling. A transform keeps every on-screen measurement
       // (taps, popups, beams) consistent; the negative margin gives back the space it no longer uses.
-      sw.style.transform = ""; sw.style.marginBottom = "0px";
+      sw.style.transform = ""; sw.style.marginBottom = "0px"; sw.style.marginTop = "0px";   // measure from a clean slate
       const top = sw.getBoundingClientRect().top + window.scrollY;
-      const need = top + sw.offsetHeight + 16;   // +12: room for the tray's slide-down while a popup is open
+      const padBottom = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
+      const need = top + sw.offsetHeight + padBottom + 14;   // +14: room above for the stack's slide-up while a popup is open
       const f = (vw <= vh * 1.1 && need > vh) ? Math.max(0.68, vh / need) : 1;
       if(f < 1){
         sw.style.transformOrigin = "50% 0";
@@ -4936,6 +4950,14 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
         sw.style.marginBottom = (-(sw.offsetHeight * (1 - f))).toFixed(1) + "px";
       }
       document.documentElement.classList.toggle("fit-short", f < 1);
+      // Rest the stack on the bottom of the screen: any spare height goes above the title.
+      sw.style.marginTop = "0px";
+      if(vw <= vh * 1.1){
+        const padB = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
+        const bottom = boardBox.getBoundingClientRect().bottom + window.scrollY;
+        const spare = Math.floor(vh - padB - bottom);
+        if(spare > 0) sw.style.marginTop = spare + "px";
+      }
     }
     positionPeekButton();
   }
@@ -4949,27 +4971,28 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     const bd = document.getElementById("board"), dock = document.getElementById("statsDock");
     if(!bd) return { x: window.innerWidth/2, y: window.innerHeight/2, top: 8 };
     const r = bd.getBoundingClientRect();
-    const below = dock ? dock.getBoundingClientRect().top : r.bottom;
-    return { x: Math.round(r.left + r.width/2), y: Math.round(r.bottom) + 9, top: Math.round(r.top) };   // eye centred in the 18px slot the tray slides open
+    // eye centred in the 18px slot that opens above the board when the stack slides up; popups hang
+    // from it over the board, never reaching past the board's bottom edge
+    return { x: Math.round(r.left + r.width/2), y: Math.round(r.top) - 9, bottom: Math.round(r.bottom) };
   }
   window.positionModalNextToPeek = function(wrap){
     const a = popupAnchor();
-    const maxH = Math.max(120, a.y - a.top);
+    const maxH = Math.max(120, a.bottom - a.y);
     wrap.style.position = "fixed";
     wrap.style.left = "50%";
     wrap.style.transform = "translateX(-50%)";
     wrap.style.width = "94%";
     wrap.style.maxWidth = "480px";
     wrap.style.margin = "0";
-    wrap.style.top = "auto";
-    wrap.style.bottom = (window.innerHeight - a.y) + "px";
+    wrap.style.bottom = "auto";
+    wrap.style.top = a.y + "px";
     wrap.style.maxHeight = maxH + "px";
     wrap.style.display = "flex";
     wrap.style.flexDirection = "column";
-    wrap.style.justifyContent = "flex-end";
+    wrap.style.justifyContent = "flex-start";
     wrap.style.visibility = "";
     const fit = ()=>{
-      const m = wrap.querySelector(".modal");
+      const m = wrap.querySelector(".modal, .tray");
       if(m){ m.style.maxHeight = maxH + "px"; m.style.overflowY = "auto"; m.style.boxSizing = "border-box"; }
     };
     fit(); requestAnimationFrame(fit);
@@ -5029,6 +5052,16 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       overlay.classList.remove("peeking");
     };
   };
+
+  // Whenever the dialog that owns the eye has been closed (by any button or path), retire the eye and
+  // let the tray and buttons slide back down.
+  {
+    const roots = ["modalRoot","settingsRoot","logRoot","optionsRoot","multiplayerRoot","saveLoadRoot","loadRequestRoot"]
+      .map(id=>document.getElementById(id)).filter(Boolean);
+    const check = ()=>{ const pb = document.getElementById("peekAnchor"); if(pb && pb._overlay && !pb._overlay.isConnected) resetPeekButton(); };
+    const mo = new MutationObserver(check);
+    roots.forEach(r=>mo.observe(r, { childList:true }));
+  }
 
   // Tile tooltips on touch: show on tap, fade after a moment (no mouseleave exists on touch).
   const tip = document.getElementById("tooltip");
