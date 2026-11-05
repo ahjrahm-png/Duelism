@@ -1880,9 +1880,11 @@ function flushPendingMinorConversions(cb){
   const missing = MAJOR_VP.filter(c=>!bucket.major.includes(c));
   if(missing.length===0){ cb(); return true; }
   switchTimer(chooserPlayer);
+  // in puzzle mode you play both sides, so name them by colour like the puzzle bar does
+  const nm = (n)=> (typeof puzzle!=="undefined" && puzzle) ? (n===1 ? "White" : "Black") : `Player ${n}`;
   askChoice(
-    `Player ${chooserPlayer} — Choose Player ${player}'s Major VP`,
-    `Player ${player} converted 2 minor VP into a major VP. Player ${chooserPlayer}, choose which major VP color Player ${player} receives.`,
+    `${nm(chooserPlayer)} — Choose ${nm(player)}'s Major VP`,
+    `${nm(player)} converted 2 minor VP into a major VP. ${nm(chooserPlayer)}, choose which major VP color ${nm(player)} receives.`,
     missing.map(c=>({label:c.charAt(0).toUpperCase()+c.slice(1), value:c, color:MAJOR_HEX[c]})),
     (color)=>{
       bucket.major.push(color);
@@ -4989,6 +4991,19 @@ function showRules(){
     <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or minor VP if they already hold that color).<br><br>
     <b>Minor VP:</b> 2 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
+    <hr style="border:none;border-top:1px solid rgba(216,178,92,.35);margin:16px 0 12px">
+    <b style="color:var(--gold);font-size:1.05em">Puzzle Mode</b><br><br>
+    <b>Setup:</b> New Game → New Puzzle, then set three difficulty sliders and Build Puzzle. The board, every piece's HP and each side's major VP are random — each side already holds 1–3 major VP.<br><br>
+    <b>Goal:</b> you play <i>both</i> sides, taking turns as usual. Each side has 1–3 more major VP colors to collect, shown with a ring in that color in the puzzle bar. (A side's held VP plus its goal is never more than 4, so there's always room for one stray VP.) Every puzzle is built from a real route, so it can always be solved.<br><br>
+    <b>Solved:</b> both sides have all of their goal colors. <b>Failed:</b> either side reaches 6 major VP — winning outright — before both goals are met.<br><br>
+    <b>All the normal rules apply.</b> When minor VP convert, the other side chooses the color — and since you're playing both sides, that's you.<br><br>
+    <b>Efficiency score</b> (lower is better), shown in the middle of the puzzle bar — tap it for the breakdown:<br>
+    • 4 per turn — a turn only counts when play passes to the other side (extra turns and "no legal moves" don't add one)<br>
+    • 8 per extra major VP and 4 per extra minor VP (beyond the goals)<br>
+    • 1 per HP of damage wasted on a defeat (overkill)<br>
+    • 1 per HP of damage left on the board at the end<br><br>
+    <b>Difficulty</b> — three sliders, each Low / Medium / High (higher is harder), measured across both sides together (one side may carry more of it): <b>Imbalance</b> — how lopsided the two goals are (even … 3 against 1); <b>Complexity</b> — how tricky the colors are: primary-color goals need one exact matchup (red only from red beating red), and kills whose color a side already holds only give a minor VP; <b>Peril</b> — how easily a careless move loses: bigger asks leave less room before 6 VP, and fragile pieces fall to stray hits. The label (e.g. M·H·H) lists Imbalance · Complexity · Peril. The board layout is just variety, never part of the difficulty.<br><br>
+    <b>Challenges:</b> after solving, Copy Challenge copies "Duelism Puzzle (your score, difficulty): link". The link opens the same puzzle with your score as the one to beat — the opener's score warms from white through yellow and orange to red as they approach it. Restart Puzzle replays it from the start; Save / Load keeps a puzzle in progress.
   `, [{label:"Close", value:null}], ()=>{}, { hideCancel:true });
 }
 
@@ -6310,14 +6325,95 @@ function pzEngineToUi(E){
   return { board, units, current:E.current, vp:{ 1:{ major:E.vp[1].maj.slice(), minor:E.vp[1].min }, 2:{ major:E.vp[2].maj.slice(), minor:E.vp[2].min } },
            winner:null, lightPending:{1:false,2:false}, log:[], pendingMinorConversions:[] };
 }
-function generatePuzzle(){
+/* ---- difficulty: three sliders, each Low / Medium / High (high = harder), measured across both sides ----
+   Each owns its own part of the setup, so no two measure the same thing:
+   • Imbalance  — the counts: the gap between the two sides' goals (even → off by one → 3 vs 1).
+   • Complexity — the colours: primary-colour goals (one exact matchup each — red only from red beating red),
+                  held-colour traps (natural kills whose colour a side already holds only give a minor VP),
+                  and, lightly, goals that need the same piece in opposite roles. High usually comes from a mix;
+                  an all-primary High puzzle is kept rare.
+   • Peril      — the margins: goal size against the 6-VP limit (bigger asks leave less slack), fragile pieces
+                  and damage sitting on bystanders, and how often quick random attempts lose. Peril is graded
+                  against other puzzles of the same Imbalance, so every one of the 27 combinations exists.
+   The difficulty may fall more on one side than the other — only the total counts. The board layout is just
+   variety, never difficulty; length follows from all three. */
+const PZ_DIMS = ["Imbalance","Complexity","Peril"];
+const PZ_LV = ["Low","Medium","High"];
+// thirds of 2,400 generated puzzles; Peril is graded within each Imbalance level so every combination exists
+const PZ_CAL = { C:[0.356, 0.477], P:{ 0:[0.555, 0.694], 1:[0.622, 0.760], 2:[0.741, 0.824] } };
+const PZ_PRIMARY = ["red","yellow","blue"];
+function pzParents(c){ return PZ_PRIMARY.includes(c) ? [c] : ({ orange:["red","yellow"], purple:["blue","red"], green:["blue","yellow"] })[c] || [c]; }
+function pzLevel(x, t){ return x < t[0] ? 0 : x < t[1] ? 1 : 2; }
+function pzImbal(goals){ return Math.min(2, Math.abs(goals[1].length - goals[2].length)); }
+// pieces the goals need as defenders (the side being defeated) and as attackers
+function pzKeyPieces(goals){
+  const def = new Set(), att = new Set();
+  [1,2].forEach(p=>{ const o = p===1 ? 2 : 1; goals[p].forEach(c=>pzParents(c).forEach(col=>{ def.add(o + "-" + col); att.add(p + "-" + col); })); });
+  return { def, att };
+}
+function pzComplexityParts(held, goals){
+  const all = goals[1].concat(goals[2]);
+  const prim = all.filter(c=>PZ_PRIMARY.includes(c)).length / Math.max(1, all.length);
+  // held-colour traps: of the 9 attacker×defender colour matchups for each side, how many land on a colour it already holds
+  const COLS = ["red","yellow","blue"];
+  let trap = 0;
+  [1,2].forEach(p=>{ let n = 0; COLS.forEach(a=>COLS.forEach(d=>{ if(held[p].includes(DuelEngine.vpFor(d, a))) n++; })); trap += n / 9; });
+  trap /= 2;
+  const k = pzKeyPieces(goals);
+  let conf = 0; k.def.forEach(x=>{ if(k.att.has(x)) conf++; });
+  conf = Math.min(1, conf / 3);
+  return { prim, trap, conf, raw: 0.5*prim + 0.38*trap + 0.12*conf };
+}
+function pzPerilRaw(startE, held, goals, risk){
+  const tight = ([1,2].reduce((n,p)=>n + (held[p].length + goals[p].length) / 4, 0)) / 2;     // 0.5 … 1
+  const k = pzKeyPieces(goals);
+  let db = 0, nb = 0; startE.units.forEach(u=>{ if(!k.def.has(u.p + "-" + u.col)){ db += 8 - u.hp; nb++; } });
+  const fragile = nb ? db / nb / 7 : 0;                                                           // damage on bystanders
+  return 0.4*risk + 0.45*(tight - 0.5)*2 + 0.15*fragile;
+}
+function pzRate(start, held, goals, N){
+  const DE = DuelEngine; N = N || 40;
+  let losses = 0; const scores = [];
+  for(let i=0;i<N;i++){
+    let E = DE.clone(start), turns = 1, cur = E.current, outcome = 0;
+    for(let ply=0; ply<70; ply++){
+      const moves = DE.allMoves(E); if(!moves.length) break;
+      const m = moves[pzRand(moves.length)], ch = [];
+      let res = DE.runTurn(E, m.ui, m.r, m.c, ch), g = 0;
+      while(!res.done && g++<40){ ch.push(pzRand(res.decision.opts.length)); res = DE.runTurn(E, m.ui, m.r, m.c, ch); }
+      if(!res.done) break;
+      E = res.E;
+      if(E.winner){ outcome = -1; break; }
+      if([1,2].every(p=>goals[p].every(c=>E.vp[p].maj.includes(c)))){ outcome = 1; break; }
+      if(E.current !== cur){ turns++; cur = E.current; }
+    }
+    if(outcome === -1) losses++;
+    else if(outcome === 1){
+      let sc = 4*turns;
+      [1,2].forEach(p=>{ sc += 8*E.vp[p].maj.filter(c=>!held[p].includes(c) && !goals[p].includes(c)).length + 4*E.vp[p].min; });
+      E.units.forEach(u=>{ sc += 8 - u.hp; });
+      scores.push(sc);
+    }
+  }
+  scores.sort((a,b)=>a-b);
+  const spread = scores.length >= 4 ? (scores[Math.floor(scores.length/2)] - scores[0]) / Math.max(1, scores[0]) : 1.2;
+  const risk = losses / N;
+  return { risk, spread };
+}
+
+function generatePuzzle(want){      // want: [Imbalance, Complexity, Peril] levels 0–2, or null for any
   const DE = DuelEngine;
-  for(let attempt=0; attempt<600; attempt++){
+  const t0 = performance.now();
+  let best = null;
+  for(let attempt=0; attempt<6000; attempt++){
     let E = DE.newGameState();
-    E.units.forEach(u=>{ u.hp = 1 + pzRand(8); });
+    // lean the random setup toward the Peril asked for: fragile pieces and fuller VP make mistakes costlier
+    const P = want ? want[2] : -1;
+    const hpLo = P===0 ? 3 : 1, hpHi = P===2 ? 6 : 8;
+    E.units.forEach(u=>{ u.hp = hpLo + pzRand(hpHi - hpLo + 1); });
     const held = {};
     [1,2].forEach(p=>{
-      const n = 1 + pzRand(3), pool = DE.MAJOR_VP.slice();
+      const n = (P===0 || (want && want[0]===2)) ? 1 + pzRand(2) : 1 + pzRand(3), pool = DE.MAJOR_VP.slice();
       held[p] = [];
       for(let k=0;k<n;k++) held[p].push(pool.splice(pzRand(pool.length),1)[0]);
       E.vp[p].maj = held[p].slice(); E.vp[p].min = 0;
@@ -6343,21 +6439,49 @@ function generatePuzzle(){
       if(gained[1].length>=1 && gained[2].length>=1 && ply>=3) cuts.push({ goals:{1:gained[1].slice(), 2:gained[2].slice()}, ply });
     }
     if(!cuts.length) continue;
-    // lean toward later points on the route, for more two- and three-colour goals
-    let tot = 0; cuts.forEach(c=>{ tot += c.ply + 4; });
-    let pick = Math.random()*tot, cut = cuts[cuts.length-1];
-    for(const c of cuts){ pick -= c.ply + 4; if(pick <= 0){ cut = c; break; } }
-    return { start: pzEngineToUi(start), goals: cut.goals, held };
+    if(!want){
+      let tot = 0; cuts.forEach(c=>{ tot += c.ply + 4; });
+      let pick = Math.random()*tot, cut = cuts[cuts.length-1];
+      for(const c of cuts){ pick -= c.ply + 4; if(pick <= 0){ cut = c; break; } }
+      return { start: pzEngineToUi(start), goals: cut.goals, held };
+    }
+    // the point on the route whose goals best fit Imbalance and Complexity (both cheap to read)…
+    let pickCut = null, pickD = 1e9, pickCx = null;
+    for(const c of cuts){
+      const I = pzImbal(c.goals), cx = pzComplexityParts(held, c.goals), C = pzLevel(cx.raw, PZ_CAL.C);
+      let d = 3*Math.abs(I - want[0]) + 2*Math.abs(C - want[1]) + Math.random()*0.5;
+      if(want[1]===2 && cx.prim===1 && Math.random() > 0.08) d += 1.5;    // keep all-primary High puzzles rare
+      // bigger asks for higher Peril: size within this shape (1v1 / 2v2 / 3v3, or 2v1 / 3v2)
+      const small = Math.min(c.goals[1].length, c.goals[2].length);
+      if(I < 2){
+        const sz = I===0 ? Math.min(2, small - 1) : (small >= 2 ? 2 : want[2]===1 ? 1 : 0);   // 2v1 reads as small, 3v2 as big
+        d += 2.2*Math.abs(sz - want[2]);
+      }
+      if(d < pickD){ pickD = d; pickCut = c; pickCx = cx; }
+    }
+    const I = pzImbal(pickCut.goals), C = pzLevel(pickCx.raw, PZ_CAL.C);
+    if(3*Math.abs(I - want[0]) + 2*Math.abs(C - want[1]) > 0 && best && performance.now() - t0 < 2000) continue;
+    // …then Peril, which needs quick simulated attempts, graded against puzzles of the same Imbalance
+    const r = pzRate(start, held, pickCut.goals);
+    const Pl = pzLevel(pzPerilRaw(start, held, pickCut.goals, r.risk), PZ_CAL.P[I]);
+    const lv = [I, C, Pl];
+    const d = 3*Math.abs(lv[0]-want[0]) + 2*Math.abs(lv[1]-want[1]) + 2*Math.abs(lv[2]-want[2]);
+    if(!best || d < best.d) best = { d, spec: { start: pzEngineToUi(start), goals: pickCut.goals, held, levels: lv } };
+    if(d === 0) break;
+    if(performance.now() - t0 > 2500) break;       // never keep the player waiting long — take the closest found
   }
-  return null;
+  return best ? best.spec : null;
 }
 
 /* ---------- codes ---------- */
 function pzMetaOf(kind){
   return { k:kind, g:[puzzle.goals[1], puzzle.goals[2]], h:[puzzle.held[1], puzzle.held[2]], m:[puzzle.startMinor[1], puzzle.startMinor[2]],
-           s:puzzle.startCode, t:puzzle.turns, w:puzzle.wasted, tg:puzzle.target, b:puzzle.base };
+           s:puzzle.startCode, t:puzzle.turns, w:puzzle.wasted, tg:puzzle.target, b:puzzle.base, lv:puzzle.levels };
 }
-function pzShareCode(){ return puzzle.startCode + "." + btoa(JSON.stringify({ k:"share", g:[puzzle.goals[1], puzzle.goals[2]] })); }
+function pzShareCode(){ return puzzle.startCode + "." + btoa(JSON.stringify({ k:"share", g:[puzzle.goals[1], puzzle.goals[2]], lv:puzzle.levels })); }
+// short label for the bar and challenges: Imbalance · Complexity · Peril, e.g. "M·H·H"
+function pzTierName(){ return (puzzle && Array.isArray(puzzle.levels) && puzzle.levels.length===3) ? puzzle.levels.map(v=>"LMH"[v]).join("·") : ""; }
+function pzLevelsText(){ return (puzzle && Array.isArray(puzzle.levels) && puzzle.levels.length===3) ? PZ_DIMS.map((d,i)=>`${d} ${PZ_LV[puzzle.levels[i]]}`).join(" · ") : ""; }
 function pzShareLink(score){
   const base = location.href.split("#")[0].split("?")[0];
   return `${base}?puzzle=${encodeURIComponent(pzShareCode())}&t=${score}`;
@@ -6377,11 +6501,12 @@ function pzShareLink(score){
   applyLoadedState = function(loaded){
     const meta = loaded && loaded.__pz, base = loaded && loaded.__pzBase;
     if(loaded){ delete loaded.__pz; delete loaded.__pzBase; }
-    if(meta && meta.k==="share"){ startPuzzle({ start: loaded, goals:{1:meta.g[0], 2:meta.g[1]}, startCode: base }, meta.tg || null); return; }
+    if(meta && meta.k==="share"){ startPuzzle({ start: loaded, goals:{1:meta.g[0], 2:meta.g[1]}, startCode: base, levels: meta.lv }, meta.tg || null); return; }
     puzzle = null;
     if(meta && meta.k==="save"){
       puzzle = { goals:{1:meta.g[0],2:meta.g[1]}, held:{1:meta.h[0],2:meta.h[1]}, startMinor:{1:meta.m[0],2:meta.m[1]}, startCode:meta.s,
-                 turns:meta.t||1, wasted:meta.w||0, target:meta.tg||null, base:(meta.b!=null ? meta.b : null), done:false };
+                 turns:meta.t||1, wasted:meta.w||0, target:meta.tg||null, base:(meta.b!=null ? meta.b : null), done:false,
+                 levels: (Array.isArray(meta.lv) && meta.lv.length===3) ? meta.lv : null };
     }
     pzSyncMode();
     _apply(loaded);
@@ -6401,7 +6526,8 @@ async function startPuzzle(spec, target){
   state.board = st.board.map(row=>row.map(t=> t.kind==="named" ? { kind:"named", card: NAMED_CARDS.find(x=>x.name===t.card.name) } : { ...t }));
   const startCode = spec.startCode || (()=>{ const keep = puzzle; puzzle = null; const c = encodeGameState(); puzzle = keep; return c; })();
   puzzle = { goals:{1:spec.goals[1].slice(), 2:spec.goals[2].slice()}, held:{1:state.vp[1].major.slice(), 2:state.vp[2].major.slice()},
-             startMinor:{1:state.vp[1].minor, 2:state.vp[2].minor}, startCode, turns:1, wasted:0, target: target||null, done:false };
+             startMinor:{1:state.vp[1].minor, 2:state.vp[2].minor}, startCode, turns:1, wasted:0, target: target||null, done:false,
+             levels: (Array.isArray(spec.levels) && spec.levels.length===3) ? spec.levels : null };
   puzzle.base = PZ.breakdown().score;      // the score before any move — where the colour gradient starts
   selectedUnit = null; pendingDest = null; pendingExtraTurn = false; preMoveSnapshot = null;
   timerTotals = {1:0, 2:0}; timerPlayer = null; timerStartMs = null;
@@ -6415,15 +6541,21 @@ async function startPuzzle(spec, target){
   startTurnLoop();
   playBoardSetupSpinAnimations();
 }
-function newPuzzle(){
-  const spec = generatePuzzle();
+function newPuzzle(levels){     // levels: [Imbalance, Complexity, Peril], each 0–2; none → open the sliders
+  if(!Array.isArray(levels)){ pzSliderDialog(); return; }
+  try{ localStorage.setItem("duelismPuzzleLevels", JSON.stringify(levels)); }catch(_){}
+  const spec = generatePuzzle(levels);
   if(!spec){ showNotice("Puzzle", "Couldn't build a puzzle — please try again.", ()=>{}); return; }
   startPuzzle(spec, null);
+  if(spec.levels){
+    const off = PZ_DIMS.filter((d,i)=>spec.levels[i] !== levels[i]);
+    if(off.length) logMsg(`Closest puzzle found: ${off.map(d=>`${d} ${PZ_LV[spec.levels[PZ_DIMS.indexOf(d)]]}`).join(", ")}.`);
+  }
 }
 function restartPuzzle(){
   if(!puzzle) return;
   const loaded = decodeGameState(puzzle.startCode);
-  startPuzzle({ start: loaded, goals: puzzle.goals, startCode: puzzle.startCode }, puzzle.target);
+  startPuzzle({ start: loaded, goals: puzzle.goals, startCode: puzzle.startCode, levels: puzzle.levels }, puzzle.target);
 }
 (function(){
   const _newGame = newGame;
@@ -6461,6 +6593,38 @@ function restartPuzzle(){
   render = function(){ const r = _render.apply(this, arguments); pzRenderBar(); return r; };
 })();
 
+function pzSliderDialog(){
+  let lv = [1,1,1];
+  try{ const v = JSON.parse(localStorage.getItem("duelismPuzzleLevels")); if(Array.isArray(v) && v.length===3) lv = v.map(x=>Math.max(0,Math.min(2,x|0))); }catch(_){}
+  const help = ["How lopsided the two sides' goals are", "How tricky the colours are: primaries, held-colour traps",
+                "How easily a careless move loses: big asks, fragile pieces"];
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = "";
+  const overlay = document.createElement("div"); overlay.className = "overlay";
+  const wrap = document.createElement("div"); wrap.className = "modal-wrap";
+  const modal = document.createElement("div"); modal.className = "modal pzCustom";
+  modal.innerHTML = `<h3>New Puzzle</h3>` + PZ_DIMS.map((d,i)=>`
+    <div class="pzRow"><div class="pzRowHead"><b>${d}</b><span>${help[i]}</span></div>
+      <div class="pzSeg" data-i="${i}">${PZ_LV.map((l,k)=>`<button type="button" data-k="${k}">${l}</button>`).join("")}</div></div>`).join("");
+  const sync = ()=>modal.querySelectorAll(".pzSeg").forEach(seg=>{ const i = +seg.dataset.i; seg.querySelectorAll("button").forEach(b=>b.classList.toggle("sel", +b.dataset.k === lv[i])); });
+  modal.querySelectorAll(".pzSeg button").forEach(b=>b.onclick = ()=>{ lv[+b.parentElement.dataset.i] = +b.dataset.k; sync(); });
+  const row = document.createElement("div"); row.className = "dismissRow";      // Build and Cancel both stay pinned in view
+  const go = document.createElement("button"); go.textContent = "Build Puzzle";
+  go.onclick = ()=>{ root.innerHTML = ""; resetPeekButton(); newPuzzle(lv.slice()); };
+  const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.className = "secondary";
+  cancel.onclick = ()=>{ root.innerHTML = ""; resetPeekButton(); };
+  row.appendChild(go); row.appendChild(cancel);
+  modal.appendChild(row);
+  wrap.appendChild(modal);
+  wrap.dataset.center = "1";
+  positionModalNextToPeek(wrap);
+  Object.assign(wrap.style, { position:"fixed", left:"50%", top:"50%", transform:"translate(-50%,-50%)", width:"94%", maxWidth:"440px", maxHeight:"92vh", display:"flex", flexDirection:"column" });
+  modal.style.maxHeight = "90vh"; modal.style.overflowY = "auto";
+  overlay.appendChild(wrap);
+  root.appendChild(overlay);
+  sync();
+}
+
 /* ---------- the puzzle bar ---------- */
 function pzSyncMode(){
   document.body.classList.toggle("puzzle-mode", !!puzzle);
@@ -6468,7 +6632,7 @@ function pzSyncMode(){
   if(puzzle && !bar){
     bar = document.createElement("div"); bar.id = "puzzleBar";
     bar.innerHTML = `<div class="pzSide" data-p="1"><div class="pzLbl">White</div><div class="pzDots"></div></div>
-      <button class="pzScore" type="button" title="Tap for the score breakdown"><span class="pzNum">0</span><span class="pzTgt"></span></button>
+      <button class="pzScore" type="button" title="Tap for the score breakdown"><span class="pzLine"><span class="pzNum">0</span><span class="pzTgt"></span></span><span class="pzTier"></span></button>
       <div class="pzSide" data-p="2"><div class="pzLbl">Black</div><div class="pzDots"></div></div>`;
     document.querySelector(".table").appendChild(bar);
     bar.querySelector(".pzScore").onclick = ()=>pzShowBreakdown();
@@ -6514,6 +6678,7 @@ function pzRenderBar(){
   num.textContent = b.score;
   num.style.color = pzScoreColor(b.score, puzzle.target);
   tgt.textContent = puzzle.target ? ` / ${puzzle.target}` : "";
+  const tierEl = bar.querySelector(".pzTier"); if(tierEl) tierEl.textContent = pzTierName();
 }
 function pzBreakdownHtml(b){
   return `<table class="pzBreak">
@@ -6526,7 +6691,8 @@ function pzBreakdownHtml(b){
 }
 function pzShowBreakdown(){
   if(!puzzle) return;
-  askChoice("Efficiency Score", `Lower is better.${puzzle.target ? ` Score to beat: <b>${puzzle.target}</b>.` : ""}${pzBreakdownHtml(PZ.breakdown())}`,
+  const lvl = pzLevelsText();
+  askChoice("Efficiency Score", `Lower is better.${puzzle.target ? ` Score to beat: <b>${puzzle.target}</b>.` : ""}${pzBreakdownHtml(PZ.breakdown())}${lvl ? `<p class="pzLvls">${lvl}</p>` : ""}`,
     [{ label:"Close", value:null }], ()=>{}, { hideCancel:true });
 }
 
@@ -6566,12 +6732,12 @@ function pzShowEnd(solved, winnerPlayer){
             : `<p class="pzVerdict miss">Didn't beat ${puzzle.target}.</p>`;
   }
   modal.innerHTML = solved
-    ? `<h3>Puzzle Solved!</h3><p>Efficiency score: <b class="pzFinal" style="color:${pzScoreColor(b.score, puzzle.target)}">${b.score}</b> <span style="color:var(--dim)">(lower is better)</span></p>${verdict}<div class="pzBreakWrap" hidden>${pzBreakdownHtml(b)}</div>`
+    ? `<h3>Puzzle Solved!</h3><p>Efficiency score: <b class="pzFinal" style="color:${pzScoreColor(b.score, puzzle.target)}">${b.score}</b> <span style="color:var(--dim)">(lower is better)</span></p>${verdict}<div class="pzBreakWrap" hidden>${pzBreakdownHtml(b)}${pzLevelsText() ? `<p class="pzLvls">${pzLevelsText()}</p>` : ""}</div>`
     : `<h3>Puzzle Failed</h3><p>${winnerPlayer===1 ? "White" : "Black"} reached 6 major VP and won outright before both goals were met.</p>`;
   const opts = document.createElement("div"); opts.className = "opts";
   const add = (label, fn, cls)=>{ const x = document.createElement("button"); x.textContent = label; if(cls) x.className = cls; x.onclick = ()=>fn(x); opts.appendChild(x); return x; };
   if(solved){
-    add("Copy Challenge", (btn)=>pzCopy(`Duelism Puzzle (${b.score}): ${pzShareLink(b.score)}`, btn));
+    add("Copy Challenge", (btn)=>pzCopy(`Duelism Puzzle (${b.score}${pzTierName() ? ", " + pzTierName() : ""}): ${pzShareLink(b.score)}`, btn));
     add("Score Breakdown", (btn)=>{ const bw = modal.querySelector(".pzBreakWrap"); bw.hidden = !bw.hidden; btn.textContent = bw.hidden ? "Score Breakdown" : "Hide Breakdown"; });
   }
   add("Restart Puzzle", ()=>{ root.innerHTML = ""; resetPeekButton(); restartPuzzle(); });
@@ -6620,7 +6786,7 @@ confirmNewGame = function(){
     delete loaded.__pz; delete loaded.__pzBase;
     if(!meta || meta.k!=="share") throw new Error("not a puzzle");
     const t = parseInt(params.get("t"), 10);
-    setTimeout(()=>startPuzzle({ start: loaded, goals:{1:meta.g[0], 2:meta.g[1]}, startCode: base }, Number.isFinite(t) && t>0 ? t : null), 50);
+    setTimeout(()=>startPuzzle({ start: loaded, goals:{1:meta.g[0], 2:meta.g[1]}, startCode: base, levels: meta.lv }, Number.isFinite(t) && t>0 ? t : null), 50);
   }catch(err){ console.warn("Bad puzzle link", err); }
 })();
 </script>
@@ -6639,7 +6805,10 @@ confirmNewGame = function(){
   #puzzleBar .pzSlot.pzGoal{ box-shadow:0 0 0 2px var(--ring), 0 0 7px 1px var(--ring); }
   #puzzleBar .pzSlot.pzGoal.pzMet{ box-shadow:0 0 0 2px var(--ring), 0 0 0 3.2px rgba(255,255,255,.85); }
   #puzzleBar .pzScore{ background:none; border:none; padding:0 6px; font-family:"Cinzel", serif; font-weight:700; color:#fff;
-    display:flex; align-items:baseline; gap:2px; cursor:pointer; }
+    display:flex; flex-direction:column; align-items:center; gap:1px; cursor:pointer; }
+  #puzzleBar .pzLine{ display:flex; align-items:baseline; gap:2px; }
+  #puzzleBar .pzTier{ font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim); font-weight:400; }
+  #puzzleBar .pzTier:empty{ display:none; }
   #puzzleBar .pzNum{ font-size:26px; line-height:1; transition:color .4s ease; text-shadow:0 0 10px rgba(0,0,0,.6); }
   #puzzleBar .pzTgt{ font-size:13px; color:var(--dim); }
   .pzBreak{ width:100%; border-collapse:collapse; margin-top:10px; font-size:13px; }
@@ -6648,6 +6817,23 @@ confirmNewGame = function(){
   .pzBreak td:last-child{ text-align:right; }
   .pzBreak tr.tot td{ border-bottom:none; color:var(--gold); font-weight:700; padding-top:7px; }
   .pzVerdict{ font-weight:700; margin-top:6px; }
+  .pzLvls{ margin-top:10px; font-size:12px; color:var(--dim); }
+  .modal.pzCustom .pzRow{ margin-top:9px; }
+  .modal.pzCustom > h3{ margin-bottom:2px; }
+  .modal.pzCustom .pzRowHead{ display:flex; flex-direction:column; gap:1px; margin-bottom:6px; }
+  .modal.pzCustom .pzRowHead b{ color:var(--gold); font-family:"Cinzel", serif; letter-spacing:.06em; }
+  .modal.pzCustom .pzRowHead span{ font-size:12px; color:var(--dim); }
+  .modal.pzCustom .pzSeg{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .modal.pzCustom .pzSeg button{ padding:6px 6px; border-radius:8px; border:1px solid rgba(216,178,92,.45); background:rgba(255,255,255,.04);
+    color:var(--ink, #e8e0d0); font-weight:600; text-align:center; cursor:pointer; }
+  .modal.pzCustom .pzSeg button.sel{ background:var(--gold); color:#1a1420; border-color:var(--gold); }
+  .modal.pzCustom .pzNote{ margin-top:8px; font-size:12px; color:#e8b86a; }
+  .modal.pzCustom .pzNote:empty{ display:none; }
+  .modal.pzCustom > .dismissRow{ flex-direction:row; }
+  .modal.pzCustom > .dismissRow button{ text-align:center; }
+  .modal.pzPick .opts{ gap:6px; margin-top:8px; }
+  .modal.pzPick .opts button{ padding:7px 11px; font-size:13px; line-height:1.25; }
+  .modal.pzPick > p{ margin:2px 0 0; }
   .pzVerdict.win{ color:#8fd18f; } .pzVerdict.tie{ color:var(--gold); } .pzVerdict.miss{ color:#e8705f; }
 </style>
 
