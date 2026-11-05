@@ -771,7 +771,7 @@
   .peek-anchor.on .eye-iris{ stroke:#141018; }
   .peek-anchor.on .eye-pupil{ fill:#141018; }
   .peek-anchor.on .eye-svg{ filter:drop-shadow(0 0 7px rgba(216,178,92,.75)); }
-  body.peek-on-deck .modal-wrap > .modal{ padding-top:24px; padding-bottom:18px; }
+  body.peek-on-deck .modal-wrap > .modal{ padding-bottom:18px; }
   /* Close / Cancel / OK stay pinned to the bottom of their dialog, visible even while the rest scrolls */
   .modal > .dismissRow{ position:sticky; bottom:-18px; z-index:2; display:flex; flex-direction:column; gap:8px;
     margin:12px -18px -18px; padding:10px 18px 18px; background:var(--panel);
@@ -789,9 +789,26 @@
   #statsDock{ order:2; }
   #newGameBtn{ order:3; } #optionsBtn{ order:4; } #multiplayerBtn{ order:5; } #saveLoadBtn{ order:6; }
   #boardBox{ order:8; margin-top:0; margin-bottom:0; }
-  .turnInfo, #statsDock, #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ transition:transform .25s ease; }
-  body.peek-on-deck .turnInfo, body.peek-on-deck #statsDock, body.peek-on-deck #newGameBtn,
-  body.peek-on-deck #optionsBtn, body.peek-on-deck #multiplayerBtn, body.peek-on-deck #saveLoadBtn{ transform:translateY(-12px); }
+  /* Tray, buttons and board all rest on the bottom of the screen; any spare height sits above the tray
+     (room for a puzzle tracker later). While a dialog with the peek eye is open, the tray and buttons slide
+     up 12px to open an 18px slot above the board for the eye. The game's title lives inside the stats tray
+     as each new game begins, then fades out as the stats fade in. */
+  h1.trayColTitle{ display:none !important; }
+  /* Peek: tap outside a dialog (e.g. the visible board) to hide it; while hidden, the eye sits in the centre
+     of the board — tap anywhere to bring the dialog back. The eye is only shown while peeking. */
+  .peek-anchor.active:not(.on){ opacity:0 !important; pointer-events:none !important; }
+  .peek-anchor.active.on{ opacity:1; pointer-events:auto; }
+  .peek-anchor .eye-svg{ transition:transform .2s ease; }
+  .peek-anchor.on .eye-svg{ transform:scale(1.6); }
+  .overlay.peekable:not(.peeking){ cursor:pointer; }
+  .overlay.peekable > .modal-wrap{ cursor:auto; }
+  .tray-group{ position:relative; }
+  .trayTitle{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;
+    font-family:"Cinzel", serif; font-weight:700; font-size:30px; letter-spacing:.24em; padding-left:.24em; color:var(--gold);
+    text-shadow:0 0 18px rgba(216,178,92,.35), 0 2px 0 rgba(0,0,0,.6); opacity:0; transition:opacity .7s ease; }
+  .tray-group > .tray{ transition:opacity .7s ease .2s; }
+  body.pre-game .trayTitle{ opacity:1; transition:opacity .5s ease; }
+  body.pre-game .tray-group > .tray{ opacity:0; transition:opacity .4s ease; }
   /* single OK / Cancel / Close buttons run full width along the bottom, like the option lists */
   .modal .cancelrow{ text-align:center; display:flex; flex-direction:column; gap:8px; margin-top:14px; }
   .modal .cancelrow button{ width:100%; padding:10px 12px; }
@@ -1130,7 +1147,13 @@ function formatHMS(ms){
 }
 
 
+let preGameToken = 0;
 function newGame(){
+  moveLock = false;
+  // Title shows in the tray while the new board deals itself out, then resolves into the players' stats.
+  gameStartedFlag = false;
+  { const tok = ++preGameToken;
+    setTimeout(()=>{ if(tok===preGameToken){ gameStartedFlag = true; updatePreGame(); } }, (typeof animationLevel!=="undefined" && animationLevel>=2) ? 2100 : 700); }
   const tiles = [];
   NAMED_CARDS.forEach(c => tiles.push({ kind:"named", card:c }));
   YINYANG_TILES.forEach(t => tiles.push({ kind:"yinyang", ...t, gemRotation: Math.floor(Math.random()*4) }));
@@ -1940,6 +1963,7 @@ function endTurn(){
     }
   }
   if(flushPendingMinorConversions(endTurn)){ render(); return; }
+  moveLock = false;                         // the turn is really over — the next move may begin
   state.units.forEach(u=>{ u._pendingTapReveal = false; });
   selectedUnit = null;
   if(state.winner){ render(); return; }
@@ -1959,10 +1983,17 @@ const POST_MOVE_SETTLE_MS = 250; // extra pause after the piece fully stops, bef
 
 let deferTrailingRender = false;
 
+// One move per turn: from the moment a piece starts moving until its turn has actually ended (glide,
+// tile effect, beams, popups), no second move can start. Without this, a quick tap on another piece while
+// the first was still gliding made a second move, ended the turn twice, and skipped the opponent's turn.
+let moveLock = false;
 function tryMove(unit, r, c){
   if(state.winner) return;
+  if(moveLock) return;
   const legal = legalMovesFor(unit);
   if(!legal.some(m=>m.r===r && m.c===c)) return;
+  moveLock = true;
+  gameStartedFlag = true;
 
   const from = {r:unit.r, c:unit.c};
   unit._animFrom = from;
@@ -2551,6 +2582,7 @@ let preMoveSnapshot = null;
 function undoLastMoveAndReset(){
   if(preMoveSnapshot){
     state = JSON.parse(preMoveSnapshot);
+    moveLock = false;
     logMsg("Turn cancelled — board reset to before the move.");
   }
 }
@@ -3213,6 +3245,7 @@ function render(){
   renderBoard();
   renderTray(1);
   renderTray(2);
+  updatePreGame();
   applyAuraGlow();
 
   if(state.winner){
@@ -3871,6 +3904,24 @@ function animateTrayHp(el, from, to){
   step();
 }
 
+// The title shows inside the stats tray as each new game begins (while the board's opening flourish
+// plays), then fades out as the players' stats fade in. A loaded or joined game shows stats right away.
+let gameStartedFlag = false;
+function isGameStarted(){
+  if(gameStartedFlag) return true;
+  if(typeof state==="undefined" || !state) return false;
+  if(state.winner) return true;
+  if(state.units.some(u=>u.tapped || u.hp!==8)) return true;
+  const v1 = state.vp[1], v2 = state.vp[2];
+  return v1.major.length>0 || v1.minor>0 || v2.major.length>0 || v2.minor>1;
+}
+function updatePreGame(){
+  const grp = document.querySelector(".tray-group");
+  if(grp && !grp.querySelector(".trayTitle")){
+    const t = document.createElement("div"); t.className = "trayTitle"; t.textContent = "Duelism"; grp.appendChild(t);
+  }
+  document.body.classList.toggle("pre-game", !isGameStarted());
+}
 function renderTray(player){
   const el = document.getElementById(`trayP${player}`);
   const oldStates = {};
@@ -4112,6 +4163,7 @@ function subscribeToRoom(code){
       applyRemoteMoveAnimationHints(oldUnits, newState.units);
       state = newState;
       selectedUnit = null;
+      moveLock = false;
       render();
     }
     catch(err){ /* malformed/out-of-sync packet — keep local state rather than crash */ }
@@ -4205,7 +4257,8 @@ function broadcastStateIfChanged(){
 // networked restriction on top — once connected, only the player this browser was assigned as can
 // act, and only on their own turn.
 function isMyTurnOrLocal(){
-  if(turnStartPending) return false;     // next turn hasn't begun yet (previous turn's beams still landing)
+  if(turnStartPending) return false;
+  if(moveLock) return false;               // a move is still resolving (next turn hasn't begun yet)
   return !mpConnected || mpLocalPlayerNumber===state.current;
 }
 
@@ -4625,6 +4678,7 @@ function decodeGameState(code){
 
 function applyLoadedState(loaded){
   state = loaded;
+  moveLock = false;
   selectedUnit = null;
   pendingExtraTurn = false;
   logMsg("Loaded a saved game.");
@@ -4978,10 +5032,10 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       // all of it evenly so it fits without scrolling. A transform keeps every on-screen measurement
       // (taps, popups, beams) consistent; the negative margin gives back the space it no longer uses.
       sw.style.transform = ""; sw.style.marginBottom = "0px"; sw.style.marginTop = "0px";   // measure from a clean slate
-      { const t0 = document.querySelector("h1.trayColTitle"); if(t0) t0.style.marginBottom = ""; }
+      boardBox.style.marginTop = "";
       const top = sw.getBoundingClientRect().top + window.scrollY;
       const padBottom = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
-      const need = top + sw.offsetHeight + padBottom + 14;   // +14: room above for the stack's slide-up while a popup is open
+      const need = top + sw.offsetHeight + padBottom + 4;
       const f = (vw <= vh * 1.1 && need > vh) ? Math.max(0.68, vh / need) : 1;
       if(f < 1){
         sw.style.transformOrigin = "50% 0";
@@ -4989,16 +5043,13 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
         sw.style.marginBottom = (-(sw.offsetHeight * (1 - f))).toFixed(1) + "px";
       }
       document.documentElement.classList.toggle("fit-short", f < 1);
-      // Title stays at the very top; the tray, buttons and board rest on the bottom of the screen, and
-      // any spare height goes in between (under the title).
-      const ttl = document.querySelector("h1.trayColTitle");
-      if(ttl) ttl.style.marginBottom = "";
-      if(ttl && vw <= vh * 1.1){
+      // Everything rests on the bottom of the screen; any spare height goes above the tray.
+      if(vw <= vh * 1.1){
         const padB = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
         const bottom = boardBox.getBoundingClientRect().bottom + window.scrollY;
         const spare = Math.floor(vh - padB - bottom);
         if(spare > 0){
-          ttl.style.marginBottom = (spare / f).toFixed(1) + "px";               // layout px inside the scaled stack
+          sw.style.marginTop = spare + "px";                                     // screen px, outside the scaled stack
           if(f < 1) sw.style.marginBottom = (-(sw.offsetHeight * (1 - f))).toFixed(1) + "px";
         }
       }
@@ -5017,7 +5068,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     const r = bd.getBoundingClientRect();
     // eye centred in the 18px slot that opens above the board when the stack slides up; popups hang
     // from it over the board, never reaching past the board's bottom edge
-    return { x: Math.round(r.left + r.width/2), y: Math.round(r.top) - 9, bottom: Math.round(r.bottom) };
+    return { x: Math.round(r.left + r.width/2), y: Math.round(r.top), bottom: Math.round(r.bottom), cy: Math.round(r.top + r.height/2) };
   }
   window.positionModalNextToPeek = function(wrap){
     watchDismissButtons(wrap);
@@ -5057,7 +5108,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     if(!peekBtn) return;
     const a = popupAnchor();
     peekBtn.style.left = a.x + "px";
-    peekBtn.style.top = a.y + "px";
+    peekBtn.style.top = (a.cy || a.y) + "px";
   };
 
 
@@ -5081,9 +5132,16 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       positionPeekButton();
       applyPeekHighlights(impactCells, choiceCells, destCells);   // markers stay on whether the popup is up or peeked away
     };
-    // Tap to toggle: the finger can lift and the board stays visible until the tab is tapped again.
+    // Tap outside the dialog (the dimmed board, tray…) to peek; while peeking, a tap anywhere — the eye in
+    // the centre of the board included — brings the dialog back.
     const onTap = (e)=>{ if(e && e.cancelable) e.preventDefault(); setPeek(!peeking); };
     peekBtn.addEventListener("click", onTap);
+    overlay.classList.add("peekable");
+    const onOverlay = (e)=>{
+      if(peeking){ e.stopPropagation(); setPeek(false); return; }
+      if(!wrap.contains(e.target)) setPeek(true);
+    };
+    overlay.addEventListener("click", onOverlay);
     peekBtn.addEventListener("contextmenu", e=>e.preventDefault());
     peekBtn.classList.add("active");
     document.body.classList.add("peek-on-deck");
@@ -5091,6 +5149,8 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     positionPeekButton();
     peekBtn._cleanup = ()=>{
       peekBtn.removeEventListener("click", onTap);
+      overlay.removeEventListener("click", onOverlay);
+      overlay.classList.remove("peekable");
       document.body.classList.remove("peek-on-deck");
       peekBtn.classList.remove("active", "on");
       peekBtn._wrap = null; peekBtn._overlay = null;
@@ -6169,5 +6229,386 @@ async function aiStart(level, humanPlayer){
 
 </script>
 <!-- DUEL-AI:END -->
+<script>
+/* ================= PUZZLE MODE =================
+   You play both sides from a random mid-game position. Each side has VP it already holds (1–3 major) and a
+   goal of 1–3 more specific major colours (held + goal ≤ 4, so there's always room for one stray VP).
+   Win: both sides' goals met. Lose: either side reaches 6 major VP (wins outright) first.
+   Every puzzle is built from a real route the engine played, so a solution always exists.
+   Efficiency score (lower is better):
+     4 per turn (a turn only counts when control passes to the other side; extra-turn effects and
+       no-legal-moves swaps don't add one) + 8 per extra major VP + 4 per extra minor VP
+     + 1 per HP of damage wasted on a defeat (overkill) + 1 per HP of damage left on the board.
+   Sharing: "Duelism Puzzle (score): link" — the link opens the same starting position with that score
+   as the target; the score turns from white through yellow and orange to red as you approach it. */
+let puzzle = null;   // { goals:{1:[],2:[]}, held:{1:[],2:[]}, startMinor:{1:n,2:n}, startCode, turns, wasted, target, done, result }
+
+const PZ = {
+  colorsOf(p){ return state.vp[p].major; },
+  goalsMet(){ return puzzle && [1,2].every(p=>puzzle.goals[p].every(c=>state.vp[p].major.includes(c))); },
+  breakdown(){
+    const extraMaj = [1,2].reduce((n,p)=>n + state.vp[p].major.filter(c=>!puzzle.held[p].includes(c) && !puzzle.goals[p].includes(c)).length, 0);
+    const extraMin = [1,2].reduce((n,p)=>n + Math.max(0, state.vp[p].minor - puzzle.startMinor[p]), 0);
+    const board = state.units.reduce((n,u)=>n + (8 - u.hp), 0);
+    const parts = { turns: puzzle.turns, extraMaj, extraMin, wasted: puzzle.wasted, board };
+    parts.score = 4*parts.turns + 8*extraMaj + 4*extraMin + parts.wasted + board;
+    return parts;
+  },
+};
+
+/* ---------- generator ---------- */
+function pzRand(n){ return Math.floor(Math.random()*n); }
+function pzEngineToUi(E){
+  const board = [];
+  for(let r=0;r<4;r++){
+    const row = [];
+    for(let c=0;c<4;c++){
+      const t = E.tiles[r*4+c];
+      if(t.k==="n") row.push({ kind:"named", card: NAMED_CARDS.find(x=>x.name===t.name) });
+      else { const y = YINYANG_TILES.find(x=>x.anchor===t.anchor && x.primary===t.p && x.secondary===t.s); row.push({ kind:"yinyang", ...y, gemRotation: pzRand(4) }); }
+    }
+    board.push(row);
+  }
+  const units = E.units.map(u=>({ player:u.p, color:u.col, hp:u.hp, r:u.r, c:u.c, tapped:!!u.t }));
+  return { board, units, current:E.current, vp:{ 1:{ major:E.vp[1].maj.slice(), minor:E.vp[1].min }, 2:{ major:E.vp[2].maj.slice(), minor:E.vp[2].min } },
+           winner:null, lightPending:{1:false,2:false}, log:[], pendingMinorConversions:[] };
+}
+function generatePuzzle(){
+  const DE = DuelEngine;
+  for(let attempt=0; attempt<600; attempt++){
+    let E = DE.newGameState();
+    E.units.forEach(u=>{ u.hp = 1 + pzRand(8); });
+    const held = {};
+    [1,2].forEach(p=>{
+      const n = 1 + pzRand(3), pool = DE.MAJOR_VP.slice();
+      held[p] = [];
+      for(let k=0;k<n;k++) held[p].push(pool.splice(pzRand(pool.length),1)[0]);
+      E.vp[p].maj = held[p].slice(); E.vp[p].min = 0;
+    });
+    E.current = 1 + pzRand(2);
+    DE.startTurn(E);
+    const start = DE.clone(E);
+    const cuts = [];
+    for(let ply=0; ply<90; ply++){
+      const moves = DE.allMoves(E);
+      if(!moves.length) break;
+      const m = moves[pzRand(moves.length)];
+      const choices = [];
+      let res = DE.runTurn(E, m.ui, m.r, m.c, choices);
+      let guard = 0;
+      while(!res.done && guard++<40){ choices.push(pzRand(res.decision.opts.length)); res = DE.runTurn(E, m.ui, m.r, m.c, choices); }
+      if(!res.done) break;
+      E = res.E;
+      if(E.winner) break;
+      const gained = {}; let ok = true;
+      [1,2].forEach(p=>{ gained[p] = E.vp[p].maj.filter(c=>!held[p].includes(c)); if(gained[p].length>3 || held[p].length + gained[p].length>4) ok = false; });
+      if(!ok) break;
+      if(gained[1].length>=1 && gained[2].length>=1 && ply>=3) cuts.push({ goals:{1:gained[1].slice(), 2:gained[2].slice()}, ply });
+    }
+    if(!cuts.length) continue;
+    // lean toward later points on the route, for more two- and three-colour goals
+    let tot = 0; cuts.forEach(c=>{ tot += c.ply + 4; });
+    let pick = Math.random()*tot, cut = cuts[cuts.length-1];
+    for(const c of cuts){ pick -= c.ply + 4; if(pick <= 0){ cut = c; break; } }
+    return { start: pzEngineToUi(start), goals: cut.goals, held };
+  }
+  return null;
+}
+
+/* ---------- codes ---------- */
+function pzMetaOf(kind){
+  return { k:kind, g:[puzzle.goals[1], puzzle.goals[2]], h:[puzzle.held[1], puzzle.held[2]], m:[puzzle.startMinor[1], puzzle.startMinor[2]],
+           s:puzzle.startCode, t:puzzle.turns, w:puzzle.wasted, tg:puzzle.target, b:puzzle.base };
+}
+function pzShareCode(){ return puzzle.startCode + "." + btoa(JSON.stringify({ k:"share", g:[puzzle.goals[1], puzzle.goals[2]] })); }
+function pzShareLink(score){
+  const base = location.href.split("#")[0].split("?")[0];
+  return `${base}?puzzle=${encodeURIComponent(pzShareCode())}&t=${score}`;
+}
+(function(){
+  const _enc = encodeGameState, _dec = decodeGameState, _apply = applyLoadedState;
+  encodeGameState = function(){
+    const base = _enc();
+    return (puzzle && !puzzle.done) ? base + "." + btoa(JSON.stringify(pzMetaOf("save"))) : base;
+  };
+  decodeGameState = function(code){
+    const parts = String(code).trim().split(".");
+    const loaded = _dec(parts[0]);
+    if(parts[1]){ const meta = JSON.parse(atob(parts[1])); if(!meta || (meta.k!=="save" && meta.k!=="share")) throw new Error("Malformed code"); loaded.__pz = meta; loaded.__pzBase = parts[0]; }
+    return loaded;
+  };
+  applyLoadedState = function(loaded){
+    const meta = loaded && loaded.__pz, base = loaded && loaded.__pzBase;
+    if(loaded){ delete loaded.__pz; delete loaded.__pzBase; }
+    if(meta && meta.k==="share"){ startPuzzle({ start: loaded, goals:{1:meta.g[0], 2:meta.g[1]}, startCode: base }, meta.tg || null); return; }
+    puzzle = null;
+    if(meta && meta.k==="save"){
+      puzzle = { goals:{1:meta.g[0],2:meta.g[1]}, held:{1:meta.h[0],2:meta.h[1]}, startMinor:{1:meta.m[0],2:meta.m[1]}, startCode:meta.s,
+                 turns:meta.t||1, wasted:meta.w||0, target:meta.tg||null, base:(meta.b!=null ? meta.b : null), done:false };
+    }
+    pzSyncMode();
+    _apply(loaded);
+  };
+})();
+
+/* ---------- starting / leaving ---------- */
+async function startPuzzle(spec, target){
+  if(typeof mpRoomCode!=="undefined" && mpRoomCode){ try{ await mpLeaveRoom(); }catch(_){} }
+  if(typeof aiStop==="function") aiStop();
+  ["modalRoot","optionsRoot","multiplayerRoot","saveLoadRoot","settingsRoot","logRoot"].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=""; });
+  resetPeekButton();
+  const st = spec.start;
+  state = JSON.parse(JSON.stringify(st));
+  moveLock = false;
+  // re-attach the shared tile objects (cards) the rest of the game compares by reference
+  state.board = st.board.map(row=>row.map(t=> t.kind==="named" ? { kind:"named", card: NAMED_CARDS.find(x=>x.name===t.card.name) } : { ...t }));
+  const startCode = spec.startCode || (()=>{ const keep = puzzle; puzzle = null; const c = encodeGameState(); puzzle = keep; return c; })();
+  puzzle = { goals:{1:spec.goals[1].slice(), 2:spec.goals[2].slice()}, held:{1:state.vp[1].major.slice(), 2:state.vp[2].major.slice()},
+             startMinor:{1:state.vp[1].minor, 2:state.vp[2].minor}, startCode, turns:1, wasted:0, target: target||null, done:false };
+  puzzle.base = PZ.breakdown().score;      // the score before any move — where the colour gradient starts
+  selectedUnit = null; pendingDest = null; pendingExtraTurn = false; preMoveSnapshot = null;
+  timerTotals = {1:0, 2:0}; timerPlayer = null; timerStartMs = null;
+  gameStartedFlag = false;
+  { const tok = ++preGameToken; setTimeout(()=>{ if(tok===preGameToken){ gameStartedFlag = true; updatePreGame(); } }, animationLevel>=2 ? 2100 : 700); }
+  logMsg(`New puzzle. Goals — White: ${puzzle.goals[1].join(", ")}; Black: ${puzzle.goals[2].join(", ")}.${puzzle.target ? ` Score to beat: ${puzzle.target}.` : ""}`);
+  yyLastPlayer = state.current;
+  switchTimer(state.current);
+  setupFlickerPending = true;
+  pzSyncMode();
+  startTurnLoop();
+  playBoardSetupSpinAnimations();
+}
+function newPuzzle(){
+  const spec = generatePuzzle();
+  if(!spec){ showNotice("Puzzle", "Couldn't build a puzzle — please try again.", ()=>{}); return; }
+  startPuzzle(spec, null);
+}
+function restartPuzzle(){
+  if(!puzzle) return;
+  const loaded = decodeGameState(puzzle.startCode);
+  startPuzzle({ start: loaded, goals: puzzle.goals, startCode: puzzle.startCode }, puzzle.target);
+}
+(function(){
+  const _newGame = newGame;
+  newGame = function(){ puzzle = null; pzSyncMode(); return _newGame.apply(this, arguments); };
+})();
+
+/* ---------- scoring hooks ---------- */
+(function(){
+  const _damage = damage;
+  damage = function(unit, amt, sourceColor, opts){
+    const before = unit ? unit.hp : 0;
+    const r = _damage.apply(this, arguments);
+    if(puzzle && !puzzle.done && amt > before) puzzle.wasted += amt - before;    // overkill on a defeat
+    return r;
+  };
+  const _endTurn = endTurn;
+  endTurn = function(){
+    const before = state.current;
+    const r = _endTurn.apply(this, arguments);
+    if(puzzle && !puzzle.done){
+      if(!state.winner && PZ.goalsMet()) pzFinish(true);
+      else if(state.current !== before) puzzle.turns += 1;
+      pzRenderBar();
+    }
+    return r;
+  };
+  const _win = showWinModal;
+  showWinModal = function(player){
+    if(puzzle && !puzzle.done){ pzFinish(false, player); return; }
+    return _win.apply(this, arguments);
+  };
+  const _isMy = isMyTurnOrLocal;
+  isMyTurnOrLocal = function(){ if(puzzle && puzzle.done) return false; return _isMy(); };
+  const _render = render;
+  render = function(){ const r = _render.apply(this, arguments); pzRenderBar(); return r; };
+})();
+
+/* ---------- the puzzle bar ---------- */
+function pzSyncMode(){
+  document.body.classList.toggle("puzzle-mode", !!puzzle);
+  let bar = document.getElementById("puzzleBar");
+  if(puzzle && !bar){
+    bar = document.createElement("div"); bar.id = "puzzleBar";
+    bar.innerHTML = `<div class="pzSide" data-p="1"><div class="pzLbl">White</div><div class="pzDots"></div></div>
+      <button class="pzScore" type="button" title="Tap for the score breakdown"><span class="pzNum">0</span><span class="pzTgt"></span></button>
+      <div class="pzSide" data-p="2"><div class="pzLbl">Black</div><div class="pzDots"></div></div>`;
+    document.querySelector(".table").appendChild(bar);
+    bar.querySelector(".pzScore").onclick = ()=>pzShowBreakdown();
+  }
+  pzRenderBar();
+  window.dispatchEvent(new Event("resize"));      // re-fit the layout with or without the bar
+}
+// White at the puzzle's starting score (it starts above 0: the board already carries damage), warming
+// through yellow and orange to red at the target.
+function pzScoreColor(score, target){
+  if(!target) return "#ffffff";
+  const base = (puzzle && puzzle.base!=null) ? puzzle.base : 0;
+  const t = target > base ? Math.max(0, Math.min(1, (score - base) / (target - base))) : (score >= target ? 1 : 0);
+  const stops = [[0,[255,255,255]], [1/3,[255,224,102]], [2/3,[255,150,52]], [1,[232,64,52]]];
+  for(let i=1;i<stops.length;i++){
+    if(t <= stops[i][0]){
+      const [a0,c0] = stops[i-1], [a1,c1] = stops[i], k = (t-a0)/(a1-a0);
+      return `rgb(${c0.map((v,j)=>Math.round(v+(c1[j]-v)*k)).join(",")})`;
+    }
+  }
+  return "rgb(232,64,52)";
+}
+function pzRenderBar(){
+  const bar = document.getElementById("puzzleBar");
+  if(!bar || !puzzle || !state) return;
+  [1,2].forEach(p=>{
+    const box = bar.querySelector(`.pzSide[data-p="${p}"] .pzDots`);
+    box.innerHTML = "";
+    MAJOR_VP.forEach(color=>{
+      const have = state.vp[p].major.includes(color), goal = puzzle.goals[p].includes(color);
+      const slot = document.createElement("div");                     // the goal ring sits on the slot, so a faded gem doesn't fade it
+      slot.className = "pzSlot" + (goal ? (have ? " pzGoal pzMet" : " pzGoal") : "");
+      slot.title = color + (goal ? (have ? " — goal met" : " — goal") : "");
+      const d = document.createElement("div");
+      d.className = "vpdot vpgem-" + color + (have ? " on" : "");
+      slot.appendChild(d);
+      box.appendChild(slot);
+    });
+  });
+  const b = PZ.breakdown();
+  const num = bar.querySelector(".pzNum"), tgt = bar.querySelector(".pzTgt");
+  num.textContent = b.score;
+  num.style.color = pzScoreColor(b.score, puzzle.target);
+  tgt.textContent = puzzle.target ? ` / ${puzzle.target}` : "";
+}
+function pzBreakdownHtml(b){
+  return `<table class="pzBreak">
+    <tr><td>Turns</td><td>${b.turns} × 4</td><td>${4*b.turns}</td></tr>
+    <tr><td>Extra major VP</td><td>${b.extraMaj} × 8</td><td>${8*b.extraMaj}</td></tr>
+    <tr><td>Extra minor VP</td><td>${b.extraMin} × 4</td><td>${4*b.extraMin}</td></tr>
+    <tr><td>Wasted damage</td><td>${b.wasted} HP</td><td>${b.wasted}</td></tr>
+    <tr><td>Damage on the board</td><td>${b.board} HP</td><td>${b.board}</td></tr>
+    <tr class="tot"><td>Efficiency score</td><td></td><td>${b.score}</td></tr></table>`;
+}
+function pzShowBreakdown(){
+  if(!puzzle) return;
+  askChoice("Efficiency Score", `Lower is better.${puzzle.target ? ` Score to beat: <b>${puzzle.target}</b>.` : ""}${pzBreakdownHtml(PZ.breakdown())}`,
+    [{ label:"Close", value:null }], ()=>{}, { hideCancel:true });
+}
+
+/* ---------- end of a puzzle ---------- */
+function pzCopy(text, btn){
+  const done = ()=>{ if(btn){ const t = btn.textContent; btn.textContent = "Copied!"; setTimeout(()=>{ btn.textContent = t; }, 1600); } };
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done, ()=>fallback()); }
+  else fallback();
+  function fallback(){
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); try{ document.execCommand("copy"); done(); }catch(_){} ta.remove();
+  }
+}
+function pzFinish(solved, winnerPlayer){
+  puzzle.done = true;
+  const b = PZ.breakdown();
+  puzzle.result = { solved, score: b.score };
+  switchTimer(null);
+  selectedUnit = null;
+  render();
+  setTimeout(()=>pzShowEnd(solved, winnerPlayer), 60);
+}
+function pzShowEnd(solved, winnerPlayer){
+  const { w } = { w: arcWaitMs() };
+  if(w > 0){ setTimeout(()=>pzShowEnd(solved, winnerPlayer), w + 40); return; }
+  const b = PZ.breakdown();
+  hideTooltip(); clearPeekHighlights();
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = "";
+  const overlay = document.createElement("div"); overlay.className = "overlay";
+  const wrap = document.createElement("div"); wrap.className = "modal-wrap";
+  const modal = document.createElement("div"); modal.className = "modal";
+  let verdict = "";
+  if(solved && puzzle.target){
+    verdict = b.score < puzzle.target ? `<p class="pzVerdict win">You beat ${puzzle.target}!</p>`
+            : b.score === puzzle.target ? `<p class="pzVerdict tie">Tied at ${puzzle.target}.</p>`
+            : `<p class="pzVerdict miss">Didn't beat ${puzzle.target}.</p>`;
+  }
+  modal.innerHTML = solved
+    ? `<h3>Puzzle Solved!</h3><p>Efficiency score: <b class="pzFinal" style="color:${pzScoreColor(b.score, puzzle.target)}">${b.score}</b> <span style="color:var(--dim)">(lower is better)</span></p>${verdict}<div class="pzBreakWrap" hidden>${pzBreakdownHtml(b)}</div>`
+    : `<h3>Puzzle Failed</h3><p>${winnerPlayer===1 ? "White" : "Black"} reached 6 major VP and won outright before both goals were met.</p>`;
+  const opts = document.createElement("div"); opts.className = "opts";
+  const add = (label, fn, cls)=>{ const x = document.createElement("button"); x.textContent = label; if(cls) x.className = cls; x.onclick = ()=>fn(x); opts.appendChild(x); return x; };
+  if(solved){
+    add("Copy Challenge", (btn)=>pzCopy(`Duelism Puzzle (${b.score}): ${pzShareLink(b.score)}`, btn));
+    add("Score Breakdown", (btn)=>{ const bw = modal.querySelector(".pzBreakWrap"); bw.hidden = !bw.hidden; btn.textContent = bw.hidden ? "Score Breakdown" : "Hide Breakdown"; });
+  }
+  add("Restart Puzzle", ()=>{ root.innerHTML = ""; resetPeekButton(); restartPuzzle(); });
+  add("New Puzzle", ()=>{ root.innerHTML = ""; resetPeekButton(); newPuzzle(); });
+  add("Close", ()=>{ root.innerHTML = ""; resetPeekButton(); }, "secondary");
+  modal.appendChild(opts);
+  wrap.appendChild(modal);
+  attachPeekButton(overlay, wrap, [], {});
+  positionModalNextToPeek(wrap);
+  overlay.appendChild(wrap);
+  root.appendChild(overlay);
+}
+
+/* ---------- New Game chooser ---------- */
+confirmNewGame = function(){
+  hideTooltip(); clearPeekHighlights();
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = "";
+  const overlay = document.createElement("div"); overlay.className = "overlay";
+  const wrap = document.createElement("div"); wrap.className = "modal-wrap";
+  const modal = document.createElement("div"); modal.className = "modal";
+  const inProgress = state && !state.winner && !(puzzle && puzzle.done) && isGameStarted();
+  modal.innerHTML = `<h3>New Game</h3><p>${inProgress ? "Starting something new ends the current game." : "What would you like to play?"}</p>`;
+  const row = document.createElement("div"); row.className = "opts";
+  const add = (label, fn, cls)=>{ const x = document.createElement("button"); x.textContent = label; if(cls) x.className = cls; x.onclick = ()=>{ root.innerHTML = ""; resetPeekButton(); fn(); }; row.appendChild(x); };
+  add("New Duel", ()=>newGame());
+  add("New Puzzle", ()=>newPuzzle());
+  if(puzzle) add("Restart Puzzle", ()=>restartPuzzle());
+  add("Cancel", ()=>{}, "secondary");
+  modal.appendChild(row);
+  wrap.appendChild(modal);
+  positionModalNextToPeek(wrap);
+  overlay.appendChild(wrap);
+  root.appendChild(overlay);
+};
+{ const ng = document.getElementById("newGameBtn"); if(ng) ng.onclick = ()=>confirmNewGame(); }
+
+/* ---------- opening a shared puzzle link ---------- */
+(function(){
+  const params = new URLSearchParams(location.search);
+  const code = params.get("puzzle");
+  if(!code) return;
+  try{
+    const loaded = decodeGameState(code);
+    const meta = loaded.__pz, base = loaded.__pzBase;
+    delete loaded.__pz; delete loaded.__pzBase;
+    if(!meta || meta.k!=="share") throw new Error("not a puzzle");
+    const t = parseInt(params.get("t"), 10);
+    setTimeout(()=>startPuzzle({ start: loaded, goals:{1:meta.g[0], 2:meta.g[1]}, startCode: base }, Number.isFinite(t) && t>0 ? t : null), 50);
+  }catch(err){ console.warn("Bad puzzle link", err); }
+})();
+</script>
+<style>
+  #puzzleBar{ display:none; }
+  body.puzzle-mode #puzzleBar{ display:grid; grid-column:1 / -1; order:1; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px;
+    padding:6px 12px; background:var(--panel); border:1px solid rgba(216,178,92,.7); border-radius:12px; box-shadow:0 3px 10px rgba(0,0,0,.45); }
+  #puzzleBar .pzSide{ display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; }
+  #puzzleBar .pzLbl{ font-family:"Cinzel", serif; font-size:11px; letter-spacing:.14em; color:var(--gold); text-transform:uppercase; }
+  #puzzleBar .pzDots{ display:flex; gap:4px; }
+  #puzzleBar .pzSlot{ width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+  #puzzleBar .vpdot{ width:16px; height:16px; border-radius:50%; }
+  #puzzleBar .pzSlot.pzGoal{ box-shadow:0 0 0 1.6px #e6c172; }
+  #puzzleBar .pzSlot.pzGoal.pzMet{ box-shadow:0 0 0 1.6px #fff1c4, 0 0 9px 2px rgba(255,214,120,.8); }
+  #puzzleBar .pzScore{ background:none; border:none; padding:0 6px; font-family:"Cinzel", serif; font-weight:700; color:#fff;
+    display:flex; align-items:baseline; gap:2px; cursor:pointer; }
+  #puzzleBar .pzNum{ font-size:26px; line-height:1; transition:color .4s ease; text-shadow:0 0 10px rgba(0,0,0,.6); }
+  #puzzleBar .pzTgt{ font-size:13px; color:var(--dim); }
+  .pzBreak{ width:100%; border-collapse:collapse; margin-top:10px; font-size:13px; }
+  .pzBreak td{ padding:4px 2px; border-bottom:1px solid rgba(216,178,92,.18); }
+  .pzBreak td:nth-child(2){ color:var(--dim); text-align:center; }
+  .pzBreak td:last-child{ text-align:right; }
+  .pzBreak tr.tot td{ border-bottom:none; color:var(--gold); font-weight:700; padding-top:7px; }
+  .pzVerdict{ font-weight:700; margin-top:6px; }
+  .pzVerdict.win{ color:#8fd18f; } .pzVerdict.tie{ color:var(--gold); } .pzVerdict.miss{ color:#e8705f; }
+</style>
+
 </body>
 </html>
