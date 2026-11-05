@@ -405,6 +405,9 @@
     text-shadow:0 1px 2px rgba(0,0,0,.6);
   }
   .piece .hpbadge.blink{ opacity:.25; }
+  /* yellow on the white token is low-contrast: a deeper gold with a thin dark edge (only this number) */
+  .piece.p1.c-yellow .hpbadge:not(.defeated){ color:#c9980f !important;
+    text-shadow:-1px 0 0 #4a3600, 1px 0 0 #4a3600, 0 -1px 0 #4a3600, 0 1px 0 #4a3600, 0 2px 3px rgba(0,0,0,.5); }
   .piece .hpbadge.flash{ text-shadow:0 0 8px rgba(255,255,255,.9), 0 1px 2px rgba(0,0,0,.6); }
   .piece .hpbadge.defeated{ color:var(--red); animation:hpPulse .5s ease infinite alternate; }
   @keyframes hpPulse{ from{ text-shadow:0 0 4px rgba(226,85,74,.6);} to{ text-shadow:0 0 11px rgba(226,85,74,.95);} }
