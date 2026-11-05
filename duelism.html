@@ -6630,6 +6630,8 @@ confirmNewGame = function(){
   #puzzleBar .pzDots{ display:flex; gap:4px; }
   #puzzleBar .pzSlot{ width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
   #puzzleBar .vpdot{ width:16px; height:16px; border-radius:50%; }
+  /* the secondary-colour gem images are taller with the gem below centre — same re-centring as the tray */
+  #puzzleBar .vpdot.vpgem-orange, #puzzleBar .vpdot.vpgem-green, #puzzleBar .vpdot.vpgem-purple{ background-position:50% 64%; }
   /* goal VP: a ring in that VP's own colour — bright and glowing while still needed, settled once earned */
   #puzzleBar .pzSlot.pzGoal{ box-shadow:0 0 0 2px var(--ring), 0 0 7px 1px var(--ring); }
   #puzzleBar .pzSlot.pzGoal.pzMet{ box-shadow:0 0 0 2px var(--ring), 0 0 0 3.2px rgba(255,255,255,.85); }
