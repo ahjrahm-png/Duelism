@@ -772,6 +772,13 @@
   .peek-anchor.on .eye-pupil{ fill:#141018; }
   .peek-anchor.on .eye-svg{ filter:drop-shadow(0 0 7px rgba(216,178,92,.75)); }
   body.peek-on-deck .modal-wrap > .modal{ padding-top:24px; padding-bottom:18px; }
+  /* Close / Cancel / OK stay pinned to the bottom of their dialog, visible even while the rest scrolls */
+  .modal > .dismissRow{ position:sticky; bottom:-18px; z-index:2; display:flex; flex-direction:column; gap:8px;
+    margin:12px -18px -18px; padding:10px 18px 18px; background:var(--panel);
+    box-shadow:0 -10px 12px -8px var(--panel); border-radius:0 0 12px 12px; }
+  .modal > .dismissRow button{ width:100%; padding:10px 12px; text-align:left; }
+  .modal > .dismissRow + .dismissRow{ margin-top:0; }
+  .modal > .cancelrow.dismissRow{ text-align:center; }
   /* Board sits right under the title. The tray and menu buttons rest against it normally; while a
      popup with the peek eye is open they slide down 12px to open an 18px slot for the eye. */
   /* Order, top to bottom: title, stats tray, menu buttons, then the board at the bottom of the screen
@@ -782,8 +789,8 @@
   #statsDock{ order:2; }
   #newGameBtn{ order:3; } #optionsBtn{ order:4; } #multiplayerBtn{ order:5; } #saveLoadBtn{ order:6; }
   #boardBox{ order:8; margin-top:0; margin-bottom:0; }
-  h1.trayColTitle, .turnInfo, #statsDock, #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ transition:transform .25s ease; }
-  body.peek-on-deck h1.trayColTitle, body.peek-on-deck .turnInfo, body.peek-on-deck #statsDock, body.peek-on-deck #newGameBtn,
+  .turnInfo, #statsDock, #newGameBtn, #optionsBtn, #multiplayerBtn, #saveLoadBtn{ transition:transform .25s ease; }
+  body.peek-on-deck .turnInfo, body.peek-on-deck #statsDock, body.peek-on-deck #newGameBtn,
   body.peek-on-deck #optionsBtn, body.peek-on-deck #multiplayerBtn, body.peek-on-deck #saveLoadBtn{ transform:translateY(-12px); }
   /* single OK / Cancel / Close buttons run full width along the bottom, like the option lists */
   .modal .cancelrow{ text-align:center; display:flex; flex-direction:column; gap:8px; margin-top:14px; }
@@ -2437,6 +2444,27 @@ function showWinModal(player){
   root.appendChild(overlay);
 }
 
+const DISMISS_RE = /^\s*(close|cancel|ok)\b/i;
+function pinDismissButtons(modal){
+  if(!modal || !modal.classList || !modal.classList.contains("modal")) return;
+  const btns = [...modal.querySelectorAll("button")].filter(b=>DISMISS_RE.test(b.textContent) && !b.closest(".dismissRow"));
+  if(!btns.length) return;
+  let row = modal.querySelector(":scope > .dismissRow");
+  if(!row){ row = document.createElement("div"); row.className = "dismissRow"; }
+  btns.forEach(b=>{
+    const holder = b.parentElement;
+    row.appendChild(b);
+    if(holder && holder !== modal && holder.children.length===0 && holder.classList.contains("cancelrow")) holder.remove();
+  });
+  modal.appendChild(row);   // always last
+}
+function watchDismissButtons(wrap){
+  const modal = wrap && wrap.querySelector(".modal");
+  if(!modal || modal._dismissWatch) { if(modal) pinDismissButtons(modal); return; }
+  pinDismissButtons(modal);
+  modal._dismissWatch = new MutationObserver(()=>{ modal._dismissWatch.disconnect(); pinDismissButtons(modal); modal._dismissWatch.observe(modal, { childList:true, subtree:true }); });
+  modal._dismissWatch.observe(modal, { childList:true, subtree:true });
+}
 function positionModalNextToPeek(wrap){
   const board = document.getElementById("board");
   if(!board) return;
@@ -4829,14 +4857,24 @@ function showOptions(){
     <button class="stoneBtn" id="optRulesBtn">Rules</button>
     <button class="stoneBtn" id="optLogBtn">Log</button>
     <button class="stoneBtn" id="optSettingsBtn">Settings</button>
-    <button class="stoneBtn" id="optCloseBtn">Close</button>
+    <button class="stoneBtn" id="optCloseBtn" style="position:sticky; bottom:0; z-index:2;">Close</button>
   `;
   modal.appendChild(col);
 
   wrap.appendChild(modal);
-  positionModalNextToPeek(wrap);
+  wrap.dataset.center = "1";            // the Options menu sits centred on the screen
   overlay.appendChild(wrap);
   root.appendChild(overlay);
+
+  // Size the four stone buttons so the whole menu fits on screen without scrolling (short phones).
+  requestAnimationFrame(()=>{
+    const over = modal.scrollHeight - modal.clientHeight;
+    if(over > 0){
+      const bh = col.firstElementChild.getBoundingClientRect().height || 1;
+      const nb = Math.max(48, bh - over/4 - 2);                          // each button gives up a quarter of the overflow
+      col.style.width = Math.max(120, Math.round(188 * nb / bh)) + "px";
+    }
+  });
 
   document.getElementById("optRulesBtn").onclick = ()=>{ root.innerHTML=""; showRules(); };
   document.getElementById("optLogBtn").onclick = ()=>{ root.innerHTML=""; showLog(); };
@@ -4940,6 +4978,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       // all of it evenly so it fits without scrolling. A transform keeps every on-screen measurement
       // (taps, popups, beams) consistent; the negative margin gives back the space it no longer uses.
       sw.style.transform = ""; sw.style.marginBottom = "0px"; sw.style.marginTop = "0px";   // measure from a clean slate
+      { const t0 = document.querySelector("h1.trayColTitle"); if(t0) t0.style.marginBottom = ""; }
       const top = sw.getBoundingClientRect().top + window.scrollY;
       const padBottom = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
       const need = top + sw.offsetHeight + padBottom + 14;   // +14: room above for the stack's slide-up while a popup is open
@@ -4950,13 +4989,18 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
         sw.style.marginBottom = (-(sw.offsetHeight * (1 - f))).toFixed(1) + "px";
       }
       document.documentElement.classList.toggle("fit-short", f < 1);
-      // Rest the stack on the bottom of the screen: any spare height goes above the title.
-      sw.style.marginTop = "0px";
-      if(vw <= vh * 1.1){
+      // Title stays at the very top; the tray, buttons and board rest on the bottom of the screen, and
+      // any spare height goes in between (under the title).
+      const ttl = document.querySelector("h1.trayColTitle");
+      if(ttl) ttl.style.marginBottom = "";
+      if(ttl && vw <= vh * 1.1){
         const padB = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
         const bottom = boardBox.getBoundingClientRect().bottom + window.scrollY;
         const spare = Math.floor(vh - padB - bottom);
-        if(spare > 0) sw.style.marginTop = spare + "px";
+        if(spare > 0){
+          ttl.style.marginBottom = (spare / f).toFixed(1) + "px";               // layout px inside the scaled stack
+          if(f < 1) sw.style.marginBottom = (-(sw.offsetHeight * (1 - f))).toFixed(1) + "px";
+        }
       }
     }
     positionPeekButton();
@@ -4976,6 +5020,8 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     return { x: Math.round(r.left + r.width/2), y: Math.round(r.top) - 9, bottom: Math.round(r.bottom) };
   }
   window.positionModalNextToPeek = function(wrap){
+    watchDismissButtons(wrap);
+    if(wrap.dataset.center){ wrap.style.visibility = ""; return; }   // centred dialogs (Options) keep the overlay's centring
     const a = popupAnchor();
     const maxH = Math.max(120, a.bottom - a.y);
     wrap.style.position = "fixed";
