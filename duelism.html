@@ -800,6 +800,8 @@
   .peek-anchor.active.on{ opacity:1; pointer-events:auto; }
   .peek-anchor .eye-svg{ transition:transform .2s ease; }
   .peek-anchor.on .eye-svg{ transform:scale(1.6); }
+  .peek-anchor .eye-blink{ transform-box:view-box; transform-origin:23px 13px; }
+  .peek-anchor .eye-look{ transform-box:view-box; }
   .overlay.peekable:not(.peeking){ cursor:pointer; }
   .overlay.peekable > .modal-wrap{ cursor:auto; }
   .tray-group{ position:relative; }
@@ -943,9 +945,14 @@
 </div>
 
 <div class="peek-anchor" id="peekAnchor" title="Tap to see the board"><span class="eye-icon"><svg class="eye-svg" viewBox="0 0 46 26" aria-hidden="true">
-  <path class="eye-lid" d="M2 13 C 11 1.5, 35 1.5, 44 13 C 35 24.5, 11 24.5, 2 13 Z"/>
-  <circle class="eye-iris" cx="23" cy="13" r="6"/>
-  <circle class="eye-pupil" cx="23" cy="13" r="2.2"/>
+  <defs><clipPath id="eyeLidClip"><path d="M2 13 C 11 1.5, 35 1.5, 44 13 C 35 24.5, 11 24.5, 2 13 Z"/></clipPath></defs>
+  <g class="eye-blink">
+    <path class="eye-lid" d="M2 13 C 11 1.5, 35 1.5, 44 13 C 35 24.5, 11 24.5, 2 13 Z"/>
+    <g clip-path="url(#eyeLidClip)"><g class="eye-look">
+      <circle class="eye-iris" cx="23" cy="13" r="6"/>
+      <circle class="eye-pupil" cx="23" cy="13" r="2.2"/>
+    </g></g>
+  </g>
 </svg></span></div>
 
 <div id="log" style="display:none;"></div>
@@ -5125,8 +5132,34 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     resetPeekButton();
     let peeking = false;
     peekBtn._wrap = wrap; peekBtn._overlay = overlay;
+    // While peeking, the eye glances around and blinks now and then — a living cue that the dialog is
+    // only hidden and the board can't be played until you tap to bring it back.
+    const eyeLook = peekBtn.querySelector(".eye-look"), eyeBlink = peekBtn.querySelector(".eye-blink");
+    let lookT = null, blinkT = null, lookAt = [0,0];
+    const glance = ()=>{
+      if(!peeking || !eyeLook) return;
+      const pick = Math.random() < .25 ? [0,0] : [ (Math.random()*2-1)*6, (Math.random()*2-1)*2.6 ];
+      eyeLook.animate([{ transform:`translate(${lookAt[0]}px,${lookAt[1]}px)` }, { transform:`translate(${pick[0].toFixed(1)}px,${pick[1].toFixed(1)}px)` }],
+                      { duration: 260 + Math.random()*160, easing:"cubic-bezier(.3,0,.2,1)", fill:"forwards" });
+      lookAt = pick;
+      lookT = setTimeout(glance, 700 + Math.random()*1300);
+    };
+    const blink = ()=>{
+      if(!peeking || !eyeBlink) return;
+      const twice = Math.random() < .2;
+      const k = [{ transform:"scaleY(1)" }, { transform:"scaleY(.08)", offset:.45 }, { transform:"scaleY(1)" }];
+      eyeBlink.animate(twice ? [...k.slice(0,2), { transform:"scaleY(1)", offset:.7 }, { transform:"scaleY(.08)", offset:.85 }, { transform:"scaleY(1)" }] : k,
+                       { duration: twice ? 380 : 170, easing:"ease-in-out" });
+      blinkT = setTimeout(blink, 2200 + Math.random()*3200);
+    };
+    const eyeLife = (on)=>{
+      clearTimeout(lookT); clearTimeout(blinkT);
+      if(on){ lookT = setTimeout(glance, 350); blinkT = setTimeout(blink, 900 + Math.random()*900); }
+      else if(eyeLook){ eyeLook.getAnimations().forEach(a=>a.cancel()); lookAt = [0,0]; }
+    };
     const setPeek = (on)=>{
       peeking = on;
+      eyeLife(on);
       overlay.classList.toggle("peeking", on);
       peekBtn.classList.toggle("on", on);
       positionPeekButton();
@@ -5148,6 +5181,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     applyPeekHighlights(impactCells, choiceCells, destCells);   // show impacted / choosable spaces right away
     positionPeekButton();
     peekBtn._cleanup = ()=>{
+      peeking = false; eyeLife(false);
       peekBtn.removeEventListener("click", onTap);
       overlay.removeEventListener("click", onOverlay);
       overlay.classList.remove("peekable");
@@ -6464,6 +6498,7 @@ function pzRenderBar(){
       const have = state.vp[p].major.includes(color), goal = puzzle.goals[p].includes(color);
       const slot = document.createElement("div");                     // the goal ring sits on the slot, so a faded gem doesn't fade it
       slot.className = "pzSlot" + (goal ? (have ? " pzGoal pzMet" : " pzGoal") : "");
+      if(goal) slot.style.setProperty("--ring", MAJOR_HEX[color] || "#e6c172");   // the ring is the colour you need
       slot.title = color + (goal ? (have ? " — goal met" : " — goal") : "");
       const d = document.createElement("div");
       d.className = "vpdot vpgem-" + color + (have ? " on" : "");
@@ -6595,8 +6630,9 @@ confirmNewGame = function(){
   #puzzleBar .pzDots{ display:flex; gap:4px; }
   #puzzleBar .pzSlot{ width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
   #puzzleBar .vpdot{ width:16px; height:16px; border-radius:50%; }
-  #puzzleBar .pzSlot.pzGoal{ box-shadow:0 0 0 1.6px #e6c172; }
-  #puzzleBar .pzSlot.pzGoal.pzMet{ box-shadow:0 0 0 1.6px #fff1c4, 0 0 9px 2px rgba(255,214,120,.8); }
+  /* goal VP: a ring in that VP's own colour — bright and glowing while still needed, settled once earned */
+  #puzzleBar .pzSlot.pzGoal{ box-shadow:0 0 0 2px var(--ring), 0 0 7px 1px var(--ring); }
+  #puzzleBar .pzSlot.pzGoal.pzMet{ box-shadow:0 0 0 2px var(--ring), 0 0 0 3.2px rgba(255,255,255,.85); }
   #puzzleBar .pzScore{ background:none; border:none; padding:0 6px; font-family:"Cinzel", serif; font-weight:700; color:#fff;
     display:flex; align-items:baseline; gap:2px; cursor:pointer; }
   #puzzleBar .pzNum{ font-size:26px; line-height:1; transition:color .4s ease; text-shadow:0 0 10px rgba(0,0,0,.6); }
