@@ -887,6 +887,8 @@
      motion — flow, churn and its slight pulse — lives inside the SVG filter instead. */
   .piece .discsmoke svg{ display:block; width:100%; height:100%; }
   .piece.tapped .discsmoke{ opacity:.35; }
+  .piece .discstars{ opacity:1; -webkit-mask:radial-gradient(circle closest-side, #000 80%, transparent 100%); mask:radial-gradient(circle closest-side, #000 80%, transparent 100%); }
+  .piece.tapped .discstars{ opacity:.45; }
   .piece.tapped::before{ --pl-lo:.22; --pl-hi:.45; }
   @keyframes discShimmer{ to{ transform:rotate(360deg); } }
   @keyframes discPulse{ from{ opacity:var(--pl-lo, .55); } to{ opacity:var(--pl-hi, 1); } }
@@ -1410,6 +1412,34 @@ function ensureSmokeFilter(key){
   });
   startAmbientTicker();
   return ids;
+}
+// Black tokens, star version: a faint night sky inside the disc, matching the pinprick stars in the black
+// aura. Two layers (dim, and fewer brighter ones), every star twinkling on its own clock. Drawn as a small
+// self-animating SVG (SMIL), like the white shimmer, so the scaled board never re-rasterises the token.
+const BLACK_DISC_FX = "stars";        // "stars" or "smoke"
+function makeBlackStars(u){
+  const R = Math.random, el = document.createElement("div");
+  el.className = "discsmoke discstars";
+  const stars = [];
+  // spread evenly: one star per cell of a jittered ring layout, kept off the very centre (the HP number)
+  const place = (n, r0, r1)=>{ const off = R(); for(let q=0;q<n;q++){ const ang = ((q + off + (R()-.5)*.8)/n)*Math.PI*2, rr = r0 + R()*(r1-r0); stars.push([50 + rr*Math.cos(ang), 50 + rr*Math.sin(ang)]); } };
+  place(7, 14, 27); place(11, 27, 44);
+  const now = performance.now()/1000;
+  let g = "";
+  stars.forEach(([x,y], i)=>{
+    const bright = R() < 0.3;                                    // the brighter, rarer layer
+    const a = bright ? 0.7 + R()*0.3 : 0.32 + R()*0.3;
+    const core = bright ? 0.95 + R()*0.35 : 0.7 + R()*0.3;      // in disc units (≈0.3 px each on a phone)
+    const dur = (bright ? 2.2 : 1.4) + R()*2.6, begin = -((now + R()*dur) % dur);
+    const lo = (a*(0.15 + R()*0.25)).toFixed(2), mid = (a*(0.55 + R()*0.3)).toFixed(2);
+    g += `<g opacity="${a.toFixed(2)}"><animate attributeName="opacity" values="${a.toFixed(2)};${mid};${lo};${a.toFixed(2)};${mid};${a.toFixed(2)}" keyTimes="0;.22;.45;.6;.8;1" dur="${dur.toFixed(2)}s" begin="${begin.toFixed(2)}s" repeatCount="indefinite"/>
+      <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(core*2.6).toFixed(2)}" fill="url(#bsGlow)"/>
+      <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${core.toFixed(2)}" fill="#fff"/></g>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none">
+    <defs><radialGradient id="bsGlow"><stop offset="0" stop-color="#dce8ff" stop-opacity=".45"/><stop offset=".45" stop-color="#dce8ff" stop-opacity=".12"/><stop offset="1" stop-color="#dce8ff" stop-opacity="0"/></radialGradient></defs>
+    ${g}</svg>`;
+  return el;
 }
 // White tokens' muted prismatic shimmer, drawn as a small self-animating SVG (SMIL) rather than with CSS
 // animations: a CSS-animated layer inside the scaled board makes the browser periodically re-rasterise the
@@ -3717,6 +3747,7 @@ function renderBoard(){
         let fx = DISC_FX_CACHE[fxKey];
         if(!fx){
           if(u.player===1) fx = makeWhiteShine(u);
+          else if(BLACK_DISC_FX==="stars") fx = makeBlackStars(u);
           else {
             const fid = ensureSmokeFilter(fxKey);
             fx = document.createElement("div"); fx.className = "discsmoke";
