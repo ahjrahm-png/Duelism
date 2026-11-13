@@ -1716,30 +1716,46 @@ function pieceGlow(cell, dark, total){
 pieceGlow.last = {};
 
 function drawDamageArc(from, to, amt){
-  if(!from || !to || from===to || animationLevel===0) return;
-  if(typeof state==="undefined" || !state.units.includes(from) || !state.units.includes(to)) return;
+  if(!from || !to || from===to || animationLevel===0) return null;
+  if(typeof state==="undefined" || !state.units.includes(from) || !state.units.includes(to)) return null;
   const board = document.getElementById("board");
-  if(!board) return;
+  if(!board) return null;
   const ca = board.children[from.r*4+from.c], cb = board.children[to.r*4+to.c];
-  if(!ca || !cb) return;
+  if(!ca || !cb) return null;
   ca.dataset.r = from.r; ca.dataset.c = from.c;
   const ra = ca.getBoundingClientRect();
   const pa = restingPiece(ca), pb = restingPiece(cb);
   const X1 = pa.x, Y1 = pa.y, X2 = pb.x, Y2 = pb.y;
   const len = Math.hypot(X2-X1, Y2-Y1);
-  if(len < 4) return;
+  if(len < 4) return null;
   const dark = from.player === 2;          // Player 1 = white pieces, Player 2 = black pieces
   const hi = animationLevel>=2;
   const charge = hi ? 200 : 110, draw = hi ? 420 : 260, hold = 140, fade = hi ? 480 : 300;
   // One beam per point of damage, launched like a volley: random stagger, varied curve, slight jitter.
   const n = Math.max(1, Math.min(8, amt||1));
-  const spread = n>1 ? (hi ? 320 : 200) : 0;
+  // each volley starts a touch apart from the others in the same effect, and its bolts land as a ripple.
+  // Hits on the same piece are spaced at least GAP apart (also after any bolts already on their way to it
+  // from another volley), so its HP number visibly ticks once per bolt.
+  const GAP = hi ? 110 : 80;
+  const lead = Math.random() * (hi ? 150 : 90);
+  const t0 = performance.now();
+  const delays = [];
+  for(let i=0;i<n;i++) delays.push(i===0 ? charge + lead + Math.random()*40 : delays[i-1] + GAP*(0.9 + Math.random()*0.5));
+  const q = (typeof HPQ!=="undefined") ? HPQ.get(to) : null;
+  if(q && q.length){
+    const busyTo = Math.max(...q.map(e=>e.at));                       // that piece's last pending hit
+    const shift = busyTo + GAP - (t0 + delays[0] + draw*0.94);
+    if(shift > 0) for(let i=0;i<n;i++) delays[i] += shift;
+  }
+  const last = delays[n-1];
   const side = arcFlip; arcFlip = -arcFlip;          // each target's volley bows to alternating sides
-  pieceGlow(ca, dark, charge + spread + draw + hold + fade);
-  arcFxUntil = Math.max(arcFxUntil, performance.now() + charge + spread + draw + hold + fade + 60);
-  arcBusyUntil = Math.max(arcBusyUntil, performance.now() + charge + spread + draw + 220);
+  pieceGlow(ca, dark, last + draw + hold + fade);
+  arcFxUntil = Math.max(arcFxUntil, t0 + last + draw + hold + fade + 60);
+  arcBusyUntil = Math.max(arcBusyUntil, t0 + last + draw + 220);
+  const lands = [];
   for(let i=0;i<n;i++){
-    const delay = charge + (i===0 ? 0 : Math.random()*spread);
+    const delay = delays[i];
+    lands.push(t0 + delay + draw*0.94);           // the moment this bolt reaches the target
     const j = ()=> (Math.random()-.5) * Math.min(5, ra.width*0.05);
     const x1 = X1, y1 = Y1, x2 = X2 + j(), y2 = Y2 + j();   // shared origin: the firing piece's centre
     const dx = x2-x1, dy = y2-y1, l = Math.hypot(dx,dy) || 1;
@@ -1747,6 +1763,7 @@ function drawDamageArc(from, to, amt){
     const cx = (x1+x2)/2 - dy/l*bow, cy = (y1+y2)/2 + dx/l*bow;
     fireBeam(x1,y1,cx,cy,x2,y2, dark, delay, draw, hold, fade);
   }
+  return lands.sort((a,b)=>a-b);
 }
 
 // Beam layers, outermost first: [class, full width, fill, opacity, blur filter]. Widths are at the
@@ -1813,28 +1830,103 @@ function fireBeam(x1,y1,cx,cy,x2,y2, dark, delay, draw, hold, fade){
   setTimeout(()=>{ if(g.isConnected) g.remove(); }, total*4 + 4000);   // safety only; normally removed on finish
 }
 
+/* ---- HP numbers tick one step at a time: down as each damage bolt lands, up in a quick run for healing.
+   The rules change hp at once; only the shown number lags. Each piece keeps a queue of pending ±1 steps
+   with the time each one shows; the number on screen = the real value minus the steps still to come. */
+const HPQ = new WeakMap();
+function hpQueue(u){ let q = HPQ.get(u); if(!q){ q = []; HPQ.set(u, q); } return q; }
+function hpPendingSum(u, now){
+  const q = HPQ.get(u); if(!q || !q.length) return 0;
+  let s = 0; for(const e of q) if(e.at > now) s += e.d;
+  return s;
+}
+function hpBusy(u){ const q = HPQ.get(u); return !!(q && q.length) || (u._defeatAt > performance.now()); }
+function hpShown(u, now){
+  now = now || performance.now();
+  const base = (u._justDefeated && u._defeatAt > now) ? 0 : u.hp;    // a piece being defeated counts down to 0 first
+  return base - hpPendingSum(u, now);
+}
+function hpQueueSteps(u, d, times){
+  const q = hpQueue(u);
+  times.forEach(at=>q.push({ at, d }));
+  u._prevHp = u._trayPrevHp = (u._justDefeated ? 0 : u.hp);        // the old one-shot counter stands aside
+  hpTickerKick();
+}
+let hpTickerOn = false;
+function hpTickerKick(){ if(!hpTickerOn){ hpTickerOn = true; requestAnimationFrame(hpTick); } }
+function hpTick(){
+  const now = performance.now();
+  let more = false;
+  if(typeof state!=="undefined" && state && state.units){
+    state.units.forEach(u=>{
+      const q = HPQ.get(u);
+      if(u._defeatAt && !u._defeatShown && now >= u._defeatAt){ u._defeatShown = true; whenPiecesStill(()=>renderBoard()); }
+      if(!q || !q.length) return;
+      const shown = hpShown(u, now);
+      if(u._hpLastShown !== shown){
+        u._hpLastShown = shown;
+        const key = u.player + "-" + u.color;
+        document.querySelectorAll(`#board .piece[data-key="${key}"] .hpbadge, .tray .hpval[data-key="${key}"]`).forEach(el=>{
+          if(el.classList.contains("defeated")) return;
+          el.textContent = shown;
+          el.classList.add("flash", "blink");
+          clearTimeout(el._blinkT); el._blinkT = setTimeout(()=>el.classList.remove("blink"), 90);
+        });
+      }
+      for(let i=q.length-1;i>=0;i--) if(q[i].at <= now) q.splice(i,1);
+      if(q.length) more = true;
+      else {
+        u._hpLastShown = undefined;
+        const key = u.player + "-" + u.color;
+        setTimeout(()=>document.querySelectorAll(`#board .piece[data-key="${key}"] .hpbadge, .tray .hpval[data-key="${key}"]`)
+          .forEach(el=>{ if(!hpBusy(u)) el.classList.remove("flash"); }), 300);
+      }
+    });
+  }
+  if(more || (typeof state!=="undefined" && state && state.units && state.units.some(u=>u._defeatAt && !u._defeatShown))) requestAnimationFrame(hpTick);
+  else hpTickerOn = false;
+}
+
 function damage(unit, amt, sourceColor, opts={}){
   if(amt<=0) return 0;
-  drawDamageArc(opts.from || arcSourceDefault, unit, amt);
+  const lands = drawDamageArc(opts.from || arcSourceDefault, unit, amt);
   const before = unit.hp;
   unit.hp = Math.max(0, unit.hp - amt);
   const applied = before - unit.hp;
+  if(applied > 0 && animationLevel > 0){
+    // one step per point actually taken, each as its bolt lands (no bolt — e.g. a piece hurting itself — ticks quickly)
+    const now = performance.now();
+    const times = lands && lands.length ? lands.slice(0, applied) : [];
+    while(times.length < applied) times.push(now + 90 + times.length*110);
+    if(unit.hp===0) unit._defeatAt = times[times.length-1], unit._defeatShown = false;
+    if(unit.hp===0) unit._justDefeated = true;                     // so the count runs down to 0, not to the reset HP
+    hpQueueSteps(unit, -1, times);
+  }
   if(unit.hp===0) defeatUnit(unit, { chosenAffinity: sourceColor, ...opts });
   return applied;
 }
 
 function heal(unit, amt){
+  const before = unit.hp;
   unit.hp = Math.min(8, unit.hp + amt);
+  const gained = unit.hp - before;
+  if(gained > 0 && animationLevel > 0){
+    const now = performance.now(), q = HPQ.get(unit);
+    const after = Math.max(now, ...(q && q.length ? q.map(e=>e.at) : [now]));   // after any hits still landing
+    hpQueueSteps(unit, +1, Array.from({length:gained}, (_,k)=>after + 80 + k*110));
+  }
 }
 
 function defeatUnit(unit, opts={}){
   const winner = opponentOf(unit.player);
   unit._justDefeated = true;
   const resetTo = opts.resetHP!==undefined ? opts.resetHP : 8;
-  setTimeout(()=>{ unit._justDefeated = false; unit._prevHp = unit.hp; render(); }, 900);
+  // the defeat shows when the last bolt lands (the number has just ticked to 0), then the piece resets
+  const wait = Math.max(0, (unit._defeatAt || 0) - performance.now());
+  setTimeout(()=>whenPiecesStill(()=>{ unit._justDefeated = false; unit._defeatAt = 0; unit._prevHp = unit._trayPrevHp = unit.hp; render(); }), wait + 900);
   unit.hp = resetTo;
   logMsg(`Player ${unit.player}'s ${cw(unit.color)} piece was defeated and resets to ${resetTo} HP.`);
-  triggerDefeatGlowPulse();
+  if(wait > 0) setTimeout(triggerDefeatGlowPulse, wait); else triggerDefeatGlowPulse();
 
   const done = opts.onResolved || (()=>{});
   if(opts.skipVP){
@@ -2045,6 +2137,13 @@ const MOVE_ANIM_MS = 800; // keep in sync with the piece-glide transition durati
 let animationLevel = 3; // 0=Off, 1=Low, 2=Med, 3=High — default High matches the full experience
 let logModalOpen = false;
 function getMoveAnimMs(){ return animationLevel===0 ? 1 : MOVE_ANIM_MS; }
+// A board redraw rebuilds every piece, which cuts a gliding piece's move short (it jumps, or restarts slowly).
+// Purely cosmetic redraws — a defeated piece resetting, a defeat mark appearing — wait for any glide to finish.
+let pieceGlideUntil = 0;
+function whenPiecesStill(fn){
+  const w = pieceGlideUntil - performance.now();
+  if(w > 0) setTimeout(()=>whenPiecesStill(fn), w + 30); else fn();
+}
 const POST_MOVE_SETTLE_MS = 250; // extra pause after the piece fully stops, before resolving/popups
 
 let deferTrailingRender = false;
@@ -3767,7 +3866,13 @@ function renderBoard(){
         if(u===selectedUnit) cell.classList.add("selected");
 
         const hp = document.createElement("div"); hp.className="hpbadge";
-        if(u._justDefeated){
+        if(u._justDefeated && u._defeatAt > performance.now()){
+          // still counting down to the defeat: show the ticking number
+          hp.style.color = COLOR_HEX[u.color];
+          hp.textContent = hpShown(u);
+          hp.classList.add("flash");
+          u._prevHp = 0;
+        } else if(u._justDefeated){
           hp.textContent = "0";
           hp.classList.add("defeated");
           const scratch = document.createElement("div"); scratch.className="scratch";
@@ -3777,10 +3882,13 @@ function renderBoard(){
           p.appendChild(scratch);
         } else {
           hp.style.color = COLOR_HEX[u.color];
-          const prev = (u._prevHp===undefined) ? u.hp : u._prevHp;
-          hp.textContent = prev;
-          if(prev !== u.hp){
-            animateHpBadge(hp, prev, u.hp);
+          if(hpBusy(u)){ hp.textContent = hpShown(u); hp.classList.add("flash"); }
+          else {
+            const prev = (u._prevHp===undefined) ? u.hp : u._prevHp;
+            hp.textContent = prev;
+            if(prev !== u.hp){
+              animateHpBadge(hp, prev, u.hp);
+            }
           }
           u._prevHp = u.hp;
         }
@@ -3859,6 +3967,7 @@ function renderBoard(){
     }
   });
 
+  if(piecesToAnimate.length || curvedPiecesToAnimate.length) pieceGlideUntil = Math.max(pieceGlideUntil, performance.now() + getMoveAnimMs() + 80);
   if(piecesToAnimate.length){
     piecesToAnimate.forEach(({el,dx,dy,fromAmbient})=>{
       el.style.transition = "none";
@@ -4021,10 +4130,15 @@ function renderTray(player){
     const row = document.createElement("div"); row.className="unitrow";
     const sw = document.createElement("div"); sw.className="swatch"; sw.style.background=COLOR_HEX[u.color];
     const hp = document.createElement("div"); hp.className="hp";
-    const trayPrev = (u._trayPrevHp===undefined) ? u.hp : u._trayPrevHp;
-    hp.innerHTML = `<span class="hpval">${trayPrev}</span> HP`;
-    if(trayPrev !== u.hp){
-      animateTrayHp(hp.querySelector(".hpval"), trayPrev, u.hp);
+    const hkey = `${u.player}-${u.color}`;
+    if(hpBusy(u)){
+      hp.innerHTML = `<span class="hpval flash" data-key="${hkey}">${hpShown(u)}</span> HP`;
+    } else {
+      const trayPrev = (u._trayPrevHp===undefined) ? u.hp : u._trayPrevHp;
+      hp.innerHTML = `<span class="hpval" data-key="${hkey}">${trayPrev}</span> HP`;
+      if(trayPrev !== u.hp){
+        animateTrayHp(hp.querySelector(".hpval"), trayPrev, u.hp);
+      }
     }
     u._trayPrevHp = u.hp;
 
