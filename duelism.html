@@ -1737,10 +1737,10 @@ function drawDamageArc(from, to, amt){
   // Hits on the same piece are spaced at least GAP apart (also after any bolts already on their way to it
   // from another volley), so its HP number visibly ticks once per bolt.
   const GAP = hi ? 110 : 80;
-  const lead = Math.random() * (hi ? 150 : 90);
+  const lead = Math.random() * (hi ? 300 : 180);          // doubled start window (a clearer ripple)
   const t0 = performance.now();
   const delays = [];
-  for(let i=0;i<n;i++) delays.push(i===0 ? charge + lead + Math.random()*40 : delays[i-1] + GAP*(0.9 + Math.random()*0.5));
+  for(let i=0;i<n;i++) delays.push(i===0 ? charge + lead + Math.random()*80 : delays[i-1] + GAP*(0.9 + Math.random()*1.0));   // doubled jitter
   const q = (typeof HPQ!=="undefined") ? HPQ.get(to) : null;
   if(q && q.length){
     const busyTo = Math.max(...q.map(e=>e.at));                       // that piece's last pending hit
