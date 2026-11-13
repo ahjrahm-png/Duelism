@@ -2104,7 +2104,9 @@ function runNamedCard(name, unit){
           damage(chosen, 2, chosen.color, { from: chosen });   // self-damage: no arc
           logMsg(`Dark: distributed 6 damage among opponent pieces sharing the chosen piece's row/column; it took 2 damage itself.`);
           endTurn();
-        });
+        },
+        { confirm: (u)=> unitsOf(opp).some(o=>o.r===u.r || o.c===u.c) ? "" :
+            `Your ${cw(u.color)} piece shares no row or column with an opponent piece, so it will deal <b>no damage</b> — it will still take 2 damage itself.` });
       break;
     }
     case "Evil": {
@@ -2417,7 +2419,16 @@ function askChoice(title, desc, options, onPick, opts={}){
       b.style.borderColor = o.color;
       b.style.fontWeight = "700";
     }
-    b.onclick = ()=>{ root.innerHTML=""; clearPeekHighlights(); resetPeekButton(); onPick(o.value); render(); };
+    const pick = ()=>{ root.innerHTML=""; clearPeekHighlights(); resetPeekButton(); onPick(o.value); render(); };
+    b.onclick = ()=>{
+      // opts.confirm(value) → a warning string means "ask Are you sure? first", offering the other options directly
+      const warn = opts.confirm && opts.confirm(o.value);
+      if(!warn) return pick();
+      const v = o.value, here = (v && typeof v==="object" && "r" in v) ? [{r:v.r, c:v.c}] : [];
+      const alts = options.filter(x=>x!==o).map(x=>({ label:`Use ${x.label} instead${opts.confirm(x.value) ? " (no damage either)" : ""}`, value:{ alt:x }, color:x.color }));
+      _askChoiceBase("Are you sure?", warn, [{label:`Yes, use ${o.label}`, value:{ alt:o }, color:o.color}].concat(alts),
+        r=>onPick(r.alt.value), { hideCancel:true, choiceCells: here });
+    };
     optsBox.appendChild(b);
   });
   modal.appendChild(optsBox);
