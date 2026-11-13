@@ -683,6 +683,7 @@
     box-shadow:0 6px 18px rgba(0,0,0,.55); text-align:left;
   }
   #tipPanel.show{ display:block; }
+  #tipPanel.overPeek{ z-index:60; pointer-events:none; }
   #tipPanel .dname{ font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-bottom:5px; }
   #tipPanel .dtext{ font-size:12.5px; line-height:1.4; color:var(--ink); }
   #tipPanel .dspecial{ font-size:11.5px; line-height:1.35; color:var(--dim); font-style:italic; margin-top:5px; }
@@ -1365,9 +1366,16 @@ function setDiscGlowTiming(el, u){
 // Soft fractal noise is warped by a second, slower noise whose strength swells and settles (the churn and
 // the pulse), then mapped to a pale icy tint whose opacity follows the noise — so every shade between the
 // black disc and the washed-out pale appears, with no edges or geometry.
+// Two layers per piece give it depth: a far layer (finer, dimmer, softer, slower — smoke deeper in the water)
+// under a near layer (bigger swirls, brighter, crisper, quicker). Each has its own drifting "density" field,
+// so the near smoke sometimes clears to show the far smoke behind it, and sometimes thickens over it.
+const SMOKE_LAYERS = {
+  far:  { fMul:1.6, churnMul:1.9, amp:5,  sc:10,   scAmp:1.0, tint:[0.52,0.58,0.66], slope:0.42, off:-0.10, blur:3.6, dens:0.030, densK:1.6, densB:-0.25, wander:7 },
+  near: { fMul:0.9, churnMul:1.1, amp:8, sc:18,  scAmp:1.5,   tint:[0.76,0.81,0.86], slope:0.85, off:-0.30, blur:2.8, dens:0.040, densK:2.0, densB:-0.55, wander:10 },
+};
 function ensureSmokeFilter(key){
-  const id = "smk-" + key;
-  if(document.getElementById(id)) return id;
+  const ids = { far:"smk-" + key + "-far", near:"smk-" + key + "-near" };
+  if(document.getElementById(ids.near)) return ids;
   let host = document.getElementById("smokeDefs");
   if(!host){
     host = document.createElementNS("http://www.w3.org/2000/svg","svg");
@@ -1375,34 +1383,33 @@ function ensureSmokeFilter(key){
     host.style.position = "absolute"; host.style.width = host.style.height = "0";
     document.body.appendChild(host);
   }
-  const R = Math.random, seed = 1 + Math.floor(R()*900), seed2 = 1 + Math.floor(R()*900);
-  const churn = (14 + R()*8).toFixed(1), drift = (22 + R()*12).toFixed(1);
-  const f0 = (0.026 + R()*0.008).toFixed(4);
-  const seed3 = 1 + Math.floor(R()*900);
-  const fx = (17 + R()*9).toFixed(1), fy = (23 + R()*11).toFixed(1);     // the density field drifts on its own path
+  const R = Math.random;
+  const churn0 = 14 + R()*8, drift = (22 + R()*12).toFixed(1), f0 = 0.026 + R()*0.008;
   const A = (v)=> (v*(R()<.5?-1:1)).toFixed(1);
-  host.insertAdjacentHTML("beforeend", `
-    <filter id="${id}" x="-25" y="-25" width="150" height="150" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feTurbulence type="fractalNoise" baseFrequency="${f0}" numOctaves="2" seed="${seed}" result="smoke"/>
-      <feTurbulence class="sk-flow" type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="${seed2}" result="flow"/>
-      <feOffset class="sk-move" in="smoke" dx="0" dy="9" result="moved"/>
-      <feDisplacementMap class="sk-disp" in="moved" in2="flow" xChannelSelector="R" yChannelSelector="G" scale="19.5" result="churned"/>
-      <feColorMatrix in="churned" type="matrix" values="0 0 0 0 0.74  0 0 0 0 0.80  0 0 0 0 0.84  0.88 0 0 0 -0.27"/>
-      <feGaussianBlur stdDeviation="2.8" result="soft"/>
-      <!-- local fading: a very soft, slow "density" field drifts across the disc on its own path, so
-           patches of smoke thin out and thicken at different times instead of the whole thing pulsing -->
-      <feTurbulence type="fractalNoise" baseFrequency="0.042" numOctaves="1" seed="${seed3}" result="dens"/>
-      <feOffset class="sk-dens" in="dens" dx="0" dy="0" result="densMoved"/>
-      <feColorMatrix in="densMoved" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  2.2 0 0 0 -0.55" result="densA"/>
-      <feComposite in="soft" in2="densA" operator="in"/>
-    </filter>`);
-  // motion parameters for the shared ticker (same paths the old built-in animations followed)
-  const f = document.getElementById(id);
-  SMOKE_ANIM.push({ flow: f.querySelector(".sk-flow"), move: f.querySelector(".sk-move"), disp: f.querySelector(".sk-disp"),
-    dens: f.querySelector(".sk-dens"), churn:+churn, drift:+drift, fx:+fx, fy:+fy,
-    ax: +A(12), ay: +A(11), p1: R()*6.28, p2: R()*6.28, p3: R()*6.28, p4: R()*6.28 });
+  ["far","near"].forEach(layer=>{
+    const L = SMOKE_LAYERS[layer], id = ids[layer];
+    const seed = 1 + Math.floor(R()*900), seed2 = 1 + Math.floor(R()*900), seed3 = 1 + Math.floor(R()*900);
+    const fx = (17 + R()*9) * (layer==="far" ? 1.4 : 1), fy = (23 + R()*11) * (layer==="far" ? 1.4 : 1);
+    host.insertAdjacentHTML("beforeend", `
+      <filter id="${id}" x="-25" y="-25" width="150" height="150" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="${(f0*L.fMul).toFixed(4)}" numOctaves="2" seed="${seed}" result="smoke"/>
+        <feTurbulence class="sk-flow" type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="${seed2}" result="flow"/>
+        <feOffset class="sk-move" in="smoke" dx="0" dy="${L.amp}" result="moved"/>
+        <feDisplacementMap class="sk-disp" in="moved" in2="flow" xChannelSelector="R" yChannelSelector="G" scale="${L.sc}" result="churned"/>
+        <feColorMatrix in="churned" type="matrix" values="0 0 0 0 ${L.tint[0]}  0 0 0 0 ${L.tint[1]}  0 0 0 0 ${L.tint[2]}  ${L.slope} 0 0 0 ${L.off}"/>
+        <feGaussianBlur stdDeviation="${L.blur}" result="soft"/>
+        <feTurbulence type="fractalNoise" baseFrequency="${L.dens}" numOctaves="1" seed="${seed3}" result="dens"/>
+        <feOffset class="sk-dens" in="dens" dx="0" dy="0" result="densMoved"/>
+        <feColorMatrix in="densMoved" type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  ${L.densK} 0 0 0 ${L.densB}" result="densA"/>
+        <feComposite in="soft" in2="densA" operator="in"/>
+      </filter>`);
+    const f = document.getElementById(id);
+    SMOKE_ANIM.push({ flow: f.querySelector(".sk-flow"), move: f.querySelector(".sk-move"), disp: f.querySelector(".sk-disp"),
+      dens: f.querySelector(".sk-dens"), churn: churn0*L.churnMul, drift:+drift, fx, fy, amp:L.amp, sc:L.sc, scAmp:L.scAmp,
+      ax: +A(L.wander), ay: +A(L.wander*0.9), p1: R()*6.28, p2: R()*6.28, p3: R()*6.28, p4: R()*6.28 });
+  });
   startAmbientTicker();
-  return id;
+  return ids;
 }
 // White tokens' muted prismatic shimmer, drawn as a small self-animating SVG (SMIL) rather than with CSS
 // animations: a CSS-animated layer inside the scaled board makes the browser periodically re-rasterise the
@@ -1462,9 +1469,9 @@ function tickShine(el, t){
 }
 function tickSmoke(m, t){
   const TAU = 2*Math.PI, th = TAU * t / m.churn;
-  m.move.setAttribute("dx", (9*Math.sin(th)).toFixed(2));
-  m.move.setAttribute("dy", (9*Math.cos(th)).toFixed(2));
-  m.disp.setAttribute("scale", (19.5 + 2.5*Math.sin(2*th + m.p2)).toFixed(2));
+  m.move.setAttribute("dx", (m.amp*Math.sin(th)).toFixed(2));
+  m.move.setAttribute("dy", (m.amp*Math.cos(th)).toFixed(2));
+  m.disp.setAttribute("scale", (m.sc + m.scAmp*Math.sin(2*th + m.p2)).toFixed(2));
   m.flow.setAttribute("baseFrequency", (0.0128 + 0.0025*Math.sin(TAU*t/m.drift + m.p1)).toFixed(5));
   m.dens.setAttribute("dx", (m.ax*Math.sin(TAU*t/m.fx + m.p3)).toFixed(2));
   m.dens.setAttribute("dy", (m.ay*Math.sin(TAU*t/m.fy + m.p4)).toFixed(2));
@@ -2048,8 +2055,11 @@ function tryMove(unit, r, c){
   }, getMoveAnimMs() + POST_MOVE_SETTLE_MS);
 }
 
+// the space whose effect is being resolved — its text is shown over the menu buttons while peeking at the board
+let resolvingCell = null;
 function resolveTile(unit){
   arcSourceDefault = unit;   // damage from this tile's effect arcs out from the piece that landed here
+  resolvingCell = { r:unit.r, c:unit.c };
   const tile = tileAt(unit.r, unit.c);
   const mover = unit.player;
   const opp = opponentOf(mover);
@@ -2620,6 +2630,7 @@ function hideTooltip(){
 
 let preMoveSnapshot = null;
 function undoLastMoveAndReset(){
+  resolvingCell = null;
   if(preMoveSnapshot){
     state = JSON.parse(preMoveSnapshot);
     moveLock = false;
@@ -2666,6 +2677,7 @@ function applyWordFlowAtElapsed(nameEl, n, elapsed, totalMs){
 function markTurnHandoff(){
   if(yyLastPlayer===null){ yyLastPlayer = state.current; return; }
   if(state.current !== yyLastPlayer){
+    resolvingCell = null;
     yyLastPlayer = state.current;
     switchTimer(state.current);
   }
@@ -3708,7 +3720,7 @@ function renderBoard(){
           else {
             const fid = ensureSmokeFilter(fxKey);
             fx = document.createElement("div"); fx.className = "discsmoke";
-            fx.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><rect width="100" height="100" filter="url(#${fid})"/></svg>`;
+            fx.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none"><rect width="100" height="100" filter="url(#${fid.far})"/><rect width="100" height="100" filter="url(#${fid.near})"/></svg>`;
           }
           DISC_FX_CACHE[fxKey] = fx;
         }
@@ -5210,6 +5222,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       peekBtn.classList.toggle("on", on);
       positionPeekButton();
       applyPeekHighlights(impactCells, choiceCells, destCells);   // markers stay on whether the popup is up or peeked away
+      if(window.tipPanelPeek) window.tipPanelPeek(on);              // the resolving space's text, over the menu buttons
     };
     // Tap outside the dialog (the dimmed board, tray…) to peek; while peeking, a tap anywhere — the eye in
     // the centre of the board included — brings the dialog back.
@@ -5228,6 +5241,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
     positionPeekButton();
     peekBtn._cleanup = ()=>{
       peeking = false; eyeLife(false);
+      if(window.tipPanelPeek) window.tipPanelPeek(false);
       peekBtn.removeEventListener("click", onTap);
       overlay.removeEventListener("click", onOverlay);
       overlay.classList.remove("peekable");
@@ -5292,6 +5306,27 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       document.querySelectorAll(".cell.lp-active").forEach(c=>c.classList.remove("lp-active"));
     }
     panel.addEventListener("click", hidePanel);          // tapping the box itself also dismisses it
+    // While a popup is peeked away, show the space being resolved as if it had been tapped. It sits above the
+    // popup's backdrop but lets taps through, so tapping anywhere still brings the popup back.
+    let peekShown = false, peekT = null;
+    window.tipPanelPeek = function(on){
+      clearTimeout(peekT);
+      if(!on){
+        if(peekShown){ peekShown = false; panel.classList.remove("overPeek"); hidePanel(); shownIdx = -1; }
+        return;
+      }
+      const rc = (typeof resolvingCell!=="undefined") ? resolvingCell : null;
+      const cell = rc ? board.children[rc.r*4 + rc.c] : null;
+      const html = cell && cell.dataset.tip;
+      if(!html) return;
+      document.querySelectorAll(".cell.lp-active").forEach(c=>c.classList.remove("lp-active"));
+      panel.innerHTML = html; shownHtml = html; shownIdx = rc.r*4 + rc.c;
+      placePanel();
+      panel.classList.add("show", "overPeek");
+      cell.classList.add("lp-active");
+      peekShown = true;
+      peekT = setTimeout(()=>{ if(peekShown) placePanel(); }, 350);   // after any layout settle
+    };
     window.addEventListener("resize", ()=>{ if(shownHtml) placePanel(); });
     window.addEventListener("orientationchange", ()=>setTimeout(()=>{ if(shownHtml) placePanel(); }, 300));
 
