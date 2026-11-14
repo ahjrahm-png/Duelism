@@ -873,6 +873,8 @@
     animation:none; opacity:.95;
   }
   .piece.p2.tapped::before{ opacity:.4; }
+  /* with the star field, the black disc stays truly black so the stars stand out — no sheen over it */
+  .piece.p2.c-red::before, .piece.p2.c-yellow::before, .piece.p2.c-blue::before{ display:none !important; animation:none !important; }
   /* Black tokens: slow churning smoke (see ensureSmokeFilter), confined to the disc and fading before the
      gold; it breathes with the token's own pulse. */
   .piece .discsmoke{
@@ -887,8 +889,9 @@
      motion — flow, churn and its slight pulse — lives inside the SVG filter instead. */
   .piece .discsmoke svg{ display:block; width:100%; height:100%; }
   .piece.tapped .discsmoke{ opacity:.35; }
-  .piece .discstars{ opacity:1; -webkit-mask:radial-gradient(circle closest-side, #000 80%, transparent 100%); mask:radial-gradient(circle closest-side, #000 80%, transparent 100%); }
-  .piece.tapped .discstars{ opacity:.45; }
+  .piece .discstars{ opacity:1; background:radial-gradient(circle closest-side, rgba(3,2,7,.72) 0%, rgba(3,2,7,.66) 62%, rgba(3,2,7,.4) 84%, rgba(3,2,7,0) 100%); -webkit-mask:radial-gradient(circle closest-side, #000 80%, transparent 100%); mask:radial-gradient(circle closest-side, #000 80%, transparent 100%); }
+  .piece.tapped .discstars{ opacity:1; }
+  .piece.tapped .discstars svg{ opacity:.45; }
   .piece.tapped::before{ --pl-lo:.22; --pl-hi:.45; }
   @keyframes discShimmer{ to{ transform:rotate(360deg); } }
   @keyframes discPulse{ from{ opacity:var(--pl-lo, .55); } to{ opacity:var(--pl-hi, 1); } }
@@ -1421,23 +1424,35 @@ function makeBlackStars(u){
   const R = Math.random, el = document.createElement("div");
   el.className = "discsmoke discstars";
   const stars = [];
-  // spread evenly: one star per cell of a jittered ring layout, kept off the very centre (the HP number)
-  const place = (n, r0, r1)=>{ const off = R(); for(let q=0;q<n;q++){ const ang = ((q + off + (R()-.5)*.8)/n)*Math.PI*2, rr = r0 + R()*(r1-r0); stars.push([50 + rr*Math.cos(ang), 50 + rr*Math.sin(ang)]); } };
-  place(7, 14, 27); place(11, 27, 44);
+  // spread evenly: one star per slot of a jittered ring layout, kept off the very centre (the HP number).
+  // Every piece gets the same mix — 2 bright of 7 on the inner ring, 4 bright of 11 on the outer — so all
+  // three read equally; only where the stars sit and when they twinkle differs.
+  const place = (n, r0, r1, nBright)=>{
+    const off = R(), brightAt = new Set();
+    for(let k=0;k<nBright;k++) brightAt.add(Math.floor((k + 0.5) * n / nBright));    // bright ones spaced round the ring
+    for(let q=0;q<n;q++){
+      const ang = ((q + off + (R()-.5)*.7)/n)*Math.PI*2;
+      let rr = r0 + R()*(r1-r0), x = 50 + rr*Math.cos(ang), y = 50 + rr*Math.sin(ang);
+      // never behind the HP number (a tall box in the middle): slide outward along the same angle until clear
+      while(Math.abs(x-50) < 17 && Math.abs(y-50) < 27 && rr < 40){ rr += 1; x = 50 + rr*Math.cos(ang); y = 50 + rr*Math.sin(ang); }
+      stars.push([x, y, brightAt.has(q)]);
+    }
+  };
+  place(7, 15, 27, 2); place(11, 28, 39, 4);      // outer ring stays inside the soft edge fade
   const now = performance.now()/1000;
   let g = "";
-  stars.forEach(([x,y], i)=>{
-    const bright = R() < 0.3;                                    // the brighter, rarer layer
-    const a = bright ? 0.7 + R()*0.3 : 0.32 + R()*0.3;
-    const core = bright ? 0.95 + R()*0.35 : 0.7 + R()*0.3;      // in disc units (≈0.3 px each on a phone)
-    const dur = (bright ? 2.2 : 1.4) + R()*2.6, begin = -((now + R()*dur) % dur);
-    const lo = (a*(0.15 + R()*0.25)).toFixed(2), mid = (a*(0.55 + R()*0.3)).toFixed(2);
+  stars.forEach(([x,y,bright], i)=>{
+    const a = bright ? 0.9 + R()*0.1 : 0.52 + R()*0.16;
+    const core = bright ? 1.05 + R()*0.2 : 0.8 + R()*0.18;     // in disc units (≈0.3 px each on a phone)
+    const dur = (bright ? 2.4 : 1.6) + R()*2.0;
+    const begin = -((now + (i/stars.length)*dur + R()*0.3) % dur);   // phases spread, so a piece never dims all at once
+    const lo = (a*(0.38 + R()*0.14)).toFixed(2), mid = (a*(0.68 + R()*0.17)).toFixed(2);
     g += `<g opacity="${a.toFixed(2)}"><animate attributeName="opacity" values="${a.toFixed(2)};${mid};${lo};${a.toFixed(2)};${mid};${a.toFixed(2)}" keyTimes="0;.22;.45;.6;.8;1" dur="${dur.toFixed(2)}s" begin="${begin.toFixed(2)}s" repeatCount="indefinite"/>
       <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(core*2.6).toFixed(2)}" fill="url(#bsGlow)"/>
       <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${core.toFixed(2)}" fill="#fff"/></g>`;
   });
   el.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none">
-    <defs><radialGradient id="bsGlow"><stop offset="0" stop-color="#dce8ff" stop-opacity=".45"/><stop offset=".45" stop-color="#dce8ff" stop-opacity=".12"/><stop offset="1" stop-color="#dce8ff" stop-opacity="0"/></radialGradient></defs>
+    <defs><radialGradient id="bsGlow"><stop offset="0" stop-color="#dce8ff" stop-opacity=".58"/><stop offset=".45" stop-color="#dce8ff" stop-opacity=".16"/><stop offset="1" stop-color="#dce8ff" stop-opacity="0"/></radialGradient></defs>
     ${g}</svg>`;
   return el;
 }
@@ -1523,6 +1538,7 @@ let arcFlip = 1, arcSeq = 0;
 // When the last beam in flight lands. Anything that follows a hit — the next turn starting (and its
 // "No Legal Moves" notice), a VP-colour or conversion popup, the win screen — waits until then.
 let arcBusyUntil = 0;
+let arcSlots = [];          // launch times booked by bolts in flight (see drawDamageArc)
 let arcFxUntil = 0;   // when the last firing glow / beam has fully faded (later than arcBusyUntil)
 // Beams in flight, tracked by their own animation progress. On a slow device or preview the first frame
 // of a beam can arrive late, so the game waits for where the beam actually is on screen, not just for
@@ -1736,16 +1752,28 @@ function drawDamageArc(from, to, amt){
   // each volley starts a touch apart from the others in the same effect, and its bolts land as a ripple.
   // Hits on the same piece are spaced at least GAP apart (also after any bolts already on their way to it
   // from another volley), so its HP number visibly ticks once per bolt.
-  const GAP = hi ? 110 : 80;
-  const lead = Math.random() * (hi ? 300 : 180);          // doubled start window (a clearer ripple)
+  const GAP = hi ? 130 : 100;          // minimum between hits on the same piece (so each tick reads)
+  const SEP = hi ? 65 : 50;            // minimum between any two launches, whatever their target
+  const lead = Math.random() * (hi ? 120 : 70);
   const t0 = performance.now();
-  const delays = [];
-  for(let i=0;i<n;i++) delays.push(i===0 ? charge + lead + Math.random()*80 : delays[i-1] + GAP*(0.9 + Math.random()*1.0));   // doubled jitter
+  // every bolt books a launch slot on one shared timeline, so even bolts at different pieces fire one after
+  // another; a bolt that would launch too close to another just takes the next free slot
+  arcSlots = arcSlots.filter(x=>x > t0 - 300);
+  let from0 = charge + lead;
   const q = (typeof HPQ!=="undefined") ? HPQ.get(to) : null;
-  if(q && q.length){
-    const busyTo = Math.max(...q.map(e=>e.at));                       // that piece's last pending hit
-    const shift = busyTo + GAP - (t0 + delays[0] + draw*0.94);
-    if(shift > 0) for(let i=0;i<n;i++) delays[i] += shift;
+  if(q && q.length){                                                  // after any hits still on their way here
+    const busyTo = Math.max(...q.map(e=>e.at));
+    from0 = Math.max(from0, busyTo + GAP - t0 - draw*0.94);
+  }
+  const delays = [];
+  for(let i=0;i<n;i++){
+    let d = i===0 ? from0 + Math.random()*60 : delays[i-1] + GAP*(1 + Math.random()*0.8);
+    for(let guard=0; guard<60; guard++){
+      const clash = arcSlots.find(x=>Math.abs(x - (t0 + d)) < SEP);
+      if(clash===undefined) break;
+      d = clash - t0 + SEP + Math.random()*25;
+    }
+    arcSlots.push(t0 + d); delays.push(d);
   }
   const last = delays[n-1];
   const side = arcFlip; arcFlip = -arcFlip;          // each target's volley bows to alternating sides
@@ -3479,8 +3507,12 @@ function attachTileiconHoverGlow(cell, iconImgEl){
 // at random each time), then sweep back out to their normal distance — landing on the *next*
 // gem's old spot. Doesn't touch any game state; the tile's real primary/secondary colors are
 // unaffected, and everything reverts to the canonical layout on the next render regardless.
+// While a piece is gliding or its move is still resolving, hovering must not touch any piece: the gem spin
+// rewrites the piece's transform (restarting the glide slowly, with a twist) and hover-select redraws the board.
+function hoverQuiet(){ return performance.now() < pieceGlideUntil || (typeof moveLock!=="undefined" && moveLock); }
 function triggerGemSpin(cell, pieceEl){
     if(animationLevel<2) return;
+    if(hoverQuiet()) return;
     const face = cell.querySelector(".yyface");
     if(!face) return;
     const dots = Array.from(face.querySelectorAll(".yydot"));
@@ -3901,6 +3933,7 @@ function renderBoard(){
         if(!state.winner && u.player===state.current && !u.tapped && isMyTurnOrLocal()){
           p.onmouseenter = ()=>{
             if(IS_TOUCH_UI) return;
+            if(hoverQuiet()) return;
             const alreadySelected = selectedUnit===u;
             if(!alreadySelected){
               selectedUnit=u;
