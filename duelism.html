@@ -1091,10 +1091,10 @@ const NAMED_CARDS = [
   { name:"Death", special:false,
     text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, excess damage carries over into its reset — it rests with that much damage still on it instead of a full 8 HP. If this defeats a piece, the normal defeat effect is replaced: you gain a minor VP instead of a major VP, and you take another turn." },
   { name:"Law", special:true,
-    text:"If both are currently possible, choose one: gain a minor VP yourself, or your opponent loses a minor VP. If only one is possible, that one happens automatically.",
-    specialText:"You cannot move to Law unless you have the least VP, and either your opponent has a minor VP or you do not have one." },
+    text:"Your opponent chooses one of their major VP and loses it, then gains a minor VP.",
+    specialText:"You cannot move to Law unless you have fewer major VP than your opponent." },
   { name:"Chaos", special:true,
-    text:"Average the HP of the piece that moved here with one of your other two pieces. If the total splits unevenly, choose which piece gets the extra point. Take another turn.",
+    text:"Swap the HP of the piece that moved here with one of your other pieces. Take another turn.",
     specialText:"You cannot move to Chaos unless you have no other legal moves." },
 ];
 
@@ -1279,13 +1279,6 @@ function findLawTile(){
   return null;
 }
 
-// Law only has an actual effect to apply if at least one of its two branches is meaningful:
-// either the opponent has a minor VP to lose, or the mover has none to gain.
-function canResolveLaw(player){
-  const opp = opponentOf(player);
-  return state.vp[opp].minor >= 1 || state.vp[player].minor === 0;
-}
-
 function legalMovesFor(unit){
   let moves = baseLegalMoves(unit);
   const chaosPos = findChaosTile();
@@ -1307,14 +1300,10 @@ function legalMovesFor(unit){
   if(lawPos){
     const hasLawMove = moves.some(m=>m.r===lawPos.r && m.c===lawPos.c);
     if(hasLawMove){
-      // Law ("You cannot move to Law unless you can resolve Law and have the least VP") —
-      // only a legal destination if this player currently holds the least (or tied-least)
-      // total VP (major + minor combined) between the two players, AND at least one of Law's
-      // two possible effects would actually do something: either the opponent has a minor VP
-      // to lose, or the mover has none to gain.
-      const qualifies = totalVP(unit.player) <= totalVP(opponentOf(unit.player));
-      const canResolve = canResolveLaw(unit.player);
-      if(!qualifies || !canResolve){
+      // Law ("You cannot move to Law unless you have fewer major VP than your opponent") — this also
+      // guarantees the opponent has a major VP for Law's effect to take.
+      const qualifies = state.vp[unit.player].major.length < state.vp[opponentOf(unit.player)].major.length;
+      if(!qualifies){
         moves = moves.filter(m => !(m.r===lawPos.r && m.c===lawPos.c));
       }
     }
@@ -2455,92 +2444,46 @@ function runNamedCard(name, unit){
       break;
     }
     case "Law": {
-      const canGain = state.vp[mover].minor === 0;
-      const canReduce = state.vp[opp].minor >= 1;
-      if(canGain && canReduce){
-        askChoice("Law — Choose the Effect",
-          `Both effects are currently available. Choose one: gain a minor VP yourself, or Player ${opp} loses a minor VP.`,
-          [
-            { label:"Gain a minor VP yourself", value:"gain" },
-            { label:`Player ${opp} loses a minor VP`, value:"reduce" },
-          ],
-          (choice)=>{
-            if(choice==="gain"){
-              grantMinorVP(mover);
-              logMsg(`Law: Player ${mover} chose to gain a minor VP.`);
-            } else {
-              loseMinorVP(opp);
-              logMsg(`Law: Player ${mover} chose to reduce Player ${opp}'s minor VP.`);
-            }
-            endTurn();
-          },
-          { hideCancel:true }
-        );
-      } else if(canGain){
-        grantMinorVP(mover);
-        logMsg(`Law: Player ${mover} had no minor VP, so gains one.`);
+      // Your opponent chooses one of their major VP and loses it, then gains a minor VP. Normal cash-in
+      // rules apply: if that makes two minors, they convert into a major and the Law player picks the color.
+      const majors = state.vp[opp].major;
+      const name = c=>c.charAt(0).toUpperCase() + c.slice(1);
+      const finish = (color)=>{
+        const i = majors.indexOf(color);
+        if(i >= 0) majors.splice(i, 1);
+        logMsg(`Law: Player ${opp} gives up their ${cw(color)} major VP and gains a minor VP instead.`);
+        grantMinorVP(opp);
         endTurn();
-      } else if(canReduce){
-        loseMinorVP(opp);
-        logMsg(`Law: Player ${mover} already had a minor VP, so Player ${opp} loses one instead.`);
+      };
+      if(!majors.length){
+        logMsg(`Law: Player ${opp} has no major VP to give up.`);   // the movement rule should prevent this
         endTurn();
+      } else if(majors.length === 1){
+        finish(majors[0]);
       } else {
-        // Shouldn't be reachable — the movement restriction should have blocked this move entirely.
-        logMsg(`Law: neither effect was available.`);
-        endTurn();
+        switchTimer(opp);
+        askChoice("Law — Opponent's Choice",
+          `Player ${opp}, choose one of your major VP to give up. You gain a minor VP in its place.`,
+          majors.map(c=>({ label: name(c), value: c, color: MAJOR_HEX[c] })),
+          (c)=>{ switchTimer(mover); finish(c); },
+          { hideCancel:true });
       }
       break;
     }
     case "Chaos": {
+      // Swap the HP of the piece that moved here with one of your other pieces. Take another turn.
       const myOthers = unitsOf(mover).filter(u=>u!==unit);
-
-      const combos = myOthers.map(o=>({ a:unit, b:o }));
-
-      const splitOf = (cmb)=>{
-        const sum = cmb.a.hp + cmb.b.hp;
-        return { sum, lo:Math.floor(sum/2), hi:Math.ceil(sum/2) };
-      };
-
-      const describeCombo = (cmb)=>{
-        const { lo, hi } = splitOf(cmb);
-        const outcome = (lo===hi) ? `both → ${lo} HP` : `splits to ${lo}/${hi} (you'll choose who gets ${hi})`;
-        return `Your ${cw(cmb.a.color)} (${cmb.a.hp} HP) + your ${cw(cmb.b.color)} (${cmb.b.hp} HP) → ${outcome}`;
-      };
-
-      const finish = (cmb, aHp, bHp)=>{
-        cmb.a.hp = aHp; cmb.b.hp = bHp;
-        logMsg(`Chaos: set ${cw(cmb.a.color)} to ${aHp} HP and ${cw(cmb.b.color)} to ${bHp} HP. Takes another turn.`);
-        pendingExtraTurn = true;
-        endTurn();
-      };
-
-      const applyCombo = (cmb)=>{
-        const { sum, lo, hi } = splitOf(cmb);
-        if(lo===hi){
-          finish(cmb, lo, lo);
-        } else {
-          askChoice(
-            "Chaos — Uneven Split",
-            `${sum} splits unevenly into ${lo} and ${hi}. Which piece should get the higher amount (${hi} HP)?`,
-            [
-              { label:`${cw(cmb.a.color)} piece gets ${hi} HP (other gets ${lo})`, value:"a" },
-              { label:`${cw(cmb.b.color)} piece gets ${hi} HP (other gets ${lo})`, value:"b" },
-            ],
-            (choice)=>{
-              if(choice==="a") finish(cmb, hi, lo);
-              else finish(cmb, lo, hi);
-            },
-            { hideCancel:true, impactCells:[{r:cmb.a.r,c:cmb.a.c},{r:cmb.b.r,c:cmb.b.c}] }
-          );
-        }
-      };
-
       askChoice(
         "Chaos",
-        "Average the HP of the piece that moved here with one of your other two pieces.",
-        combos.map(cmb=>({ label: describeCombo(cmb), value: cmb })),
-        applyCombo,
-        { choiceCells: combos.flatMap(cmb=>[{r:cmb.a.r,c:cmb.a.c},{r:cmb.b.r,c:cmb.b.c}]) }
+        "Swap the HP of the piece that moved here with one of your other pieces.",
+        myOthers.map(o=>({ label:`Your ${cw(unit.color)} (${unit.hp} HP) ⇄ your ${cw(o.color)} (${o.hp} HP)`, value:o, color:COLOR_HEX[o.color] })),
+        (o)=>{
+          const t = unit.hp; unit.hp = o.hp; o.hp = t;
+          logMsg(`Chaos: swapped HP — ${cw(unit.color)} now ${unit.hp} HP, ${cw(o.color)} now ${o.hp} HP. Takes another turn.`);
+          pendingExtraTurn = true;
+          endTurn();
+        },
+        { choiceCells: myOthers.map(o=>({r:o.r,c:o.c})).concat([{r:unit.r,c:unit.c}]) }
       );
       break;
     }
@@ -5654,7 +5597,6 @@ function baseLegal(E, ui){
   return out;
 }
 
-function canResolveLaw(E, p){ return E.vp[opp(p)].min >= 1 || E.vp[p].min === 0; }
 
 // Legal destination squares (r*4+c) for a unit, including the Chaos / Law restrictions.
 function legalMoves(E, ui){
@@ -5668,8 +5610,8 @@ function legalMoves(E, ui){
   }
   const law = findTile(E, "Law");
   if(law>=0 && moves.indexOf(law)>=0){
-    const qualifies = totalVP(E,u.p) <= totalVP(E,opp(u.p));
-    if(!qualifies || !canResolveLaw(E,u.p)) moves = moves.filter(m=>m!==law);
+    // "You cannot move to Law unless you have fewer major VP than your opponent" (so they always have one to lose)
+    if(!(E.vp[u.p].maj.length < E.vp[opp(u.p)].maj.length)) moves = moves.filter(m=>m!==law);
   }
   return moves;
 }
@@ -5921,26 +5863,23 @@ function* named(E, name, ui){
       break;
     }
     case "Law": {
-      const canGain = E.vp[mover].min === 0;
-      const canReduce = E.vp[o].min >= 1;
-      if(canGain && canReduce){
-        const k = yield { p:mover, kind:"law", opts:["gain","reduce"] };
-        if(k===0) grantMinorVP(E, mover); else loseMinorVP(E, o);
-      } else if(canGain){ grantMinorVP(E, mover); }
-      else if(canReduce){ loseMinorVP(E, o); }
+      // Your opponent chooses one of their major VP and loses it, then gains a minor VP (normal cash-in rules:
+      // a second minor converts into a major at once, with the Law player choosing the color).
+      const maj = E.vp[o].maj;
+      if(maj.length){
+        const k = maj.length > 1 ? (yield { p:o, kind:"lawmajor", opts:maj.slice() }) : 0;
+        maj.splice(k, 1);
+        grantMinorVP(E, o);
+      }
       yield* endTurn(E);
       break;
     }
     case "Chaos": {
+      // Swap the HP of the piece that moved here with one of your other pieces. Take another turn.
       const others = mine.filter(i=>i!==ui);
       const k = yield { p:mover, kind:"chaos", opts:others };
       const a = E.units[ui], b = E.units[others[k]];
-      const sum = a.hp + b.hp, lo = Math.floor(sum/2), hi = Math.ceil(sum/2);
-      if(lo===hi){ a.hp = lo; b.hp = lo; }
-      else {
-        const k2 = yield { p:mover, kind:"chaossplit", opts:["a","b"] };
-        if(k2===0){ a.hp = hi; b.hp = lo; } else { a.hp = lo; b.hp = hi; }
-      }
+      const t = a.hp; a.hp = b.hp; b.hp = t;
       E.extra = true;
       yield* endTurn(E);
       break;
