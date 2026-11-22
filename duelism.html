@@ -173,6 +173,20 @@
   }
   .vpdot.on{opacity:1; filter:none; }
   .vpGroup{ display:contents; }               /* gems sit directly in the column/grid layouts (the tray rows group them) */
+  .tray .vpCol .vpGroup.minorRow{ flex:0 0 100%; justify-content:center; margin-top:1.1px; }
+  .vpdot.cashin{ filter:brightness(1.35) drop-shadow(0 0 3px rgba(255,255,255,.8)); }
+  /* cash-in resolved: the white gems flicker out (ending at the dim resting look) as the new major glows up */
+  .vpdot.flickerout{ animation:minorFlickerOut .62s linear 1 both; }
+  @keyframes minorFlickerOut{
+    0%{ opacity:1; filter:none; } 18%{ opacity:.35; filter:none; } 30%{ opacity:.95; filter:brightness(1.4); }
+    46%{ opacity:.22; filter:grayscale(.5); } 58%{ opacity:.7; filter:grayscale(.3); } 74%{ opacity:.18; filter:grayscale(.9); }
+    84%{ opacity:.45; filter:grayscale(.9); } 100%{ opacity:.16; filter:grayscale(1); } }
+  .vpdot.glowup{ animation:majorGlowUp .8s ease-out 1 both; }
+  @keyframes majorGlowUp{
+    0%{ opacity:.16; filter:grayscale(1); transform:scale(1); }
+    45%{ opacity:1; filter:brightness(2) drop-shadow(0 0 6px rgba(255,236,180,.95)); transform:scale(1.3); }
+    100%{ opacity:1; filter:none; transform:scale(1); } }
+  body.anim-off .vpdot.flickerout, body.anim-off .vpdot.glowup{ animation:none; }
   .timerDisplay{
     margin-top:10px; font-size:12px; letter-spacing:.06em; color:var(--dim);
     font-variant-numeric:tabular-nums; text-align:center;
@@ -323,6 +337,18 @@
   .yydot.right{ top:50%; right:8%; margin-top:-12.5px; }
   .yydot.bottom{ bottom:8%; left:50%; margin-left:-12.5px; }
   .yydot.left{ top:50%; left:8%; margin-top:-12.5px; }
+  /* Settings → "Diagonal Gems": gems rest on the diagonals, hugging the piece — 59px from the tile centre (just
+     clear of a 90px piece), i.e. 41.7px along each axis. Slots turn 45° clockwise: top→NE, right→SE, bottom→SW,
+     left→NW. Their spin then swings OUT through the compass point (the normal 81px reach) and back in. */
+  body.gems-diag .yyface{ --gem-d:41.7px; }
+  body.gems-diag .yydot.top,
+  body.gems-diag .yydot.right,
+  body.gems-diag .yydot.bottom,
+  body.gems-diag .yydot.left{ right:auto; bottom:auto; margin:0; }
+  body.gems-diag .yydot.top{    left:calc(50% + var(--gem-d) - 12.5px); top:calc(50% - var(--gem-d) - 12.5px); }
+  body.gems-diag .yydot.right{  left:calc(50% + var(--gem-d) - 12.5px); top:calc(50% + var(--gem-d) - 12.5px); }
+  body.gems-diag .yydot.bottom{ left:calc(50% - var(--gem-d) - 12.5px); top:calc(50% + var(--gem-d) - 12.5px); }
+  body.gems-diag .yydot.left{   left:calc(50% - var(--gem-d) - 12.5px); top:calc(50% - var(--gem-d) - 12.5px); }
   .piece{
     width:90px; height:90px; border-radius:50%; display:flex; align-items:center; justify-content:center;
     font-weight:600; cursor:pointer; user-select:none; position:relative; z-index:3;
@@ -673,6 +699,12 @@
   .tray .hourglass{ font-size:15px; width:15px; height:15px; line-height:15px; }
   .tray .vpCol{ gap:3px; }
   .tray .vpdot{ width:15px; height:15px; }
+  /* VP gems: majors on one row, the 4 minors centred on a row below. --vg-s is the gem size; the block is held at
+     34.1px tall (what it was with 15px gems) so the tray doesn't change size — --vg-v is the space between rows. */
+  .tray .vpCol{ --vg-s:17px; --vg-g:1.5px; --vg-v:0px; height:34.1px; align-content:center; column-gap:var(--vg-g); row-gap:0; }
+  .tray .vpCol .vpGroup{ gap:var(--vg-g); }
+  .tray .vpCol .vpdot{ width:var(--vg-s); height:var(--vg-s); }
+  .tray .vpCol .vpGroup.minorRow{ margin-top:var(--vg-v); }
   #menuPanel{ padding:8px 10px 22px; gap:8px 10px; }
   #menuPanel .sideBtn.stoneBtn{ font-size:11px; }
   #dockTab{ bottom:-22px; height:36px; width:96px; font-size:18px; }
@@ -2010,6 +2042,48 @@ function grantMajorVPChosen(winner, chooser, onDone){
 
 // Minor VP: 4 make a major. Most effects give 2, a duplicate-colour defeat gives 3, Evil gives 1.
 const MINOR_PER_MAJOR = 4;
+// Tray display of a cash-in. "full": the 4 white gems are lit and pulsing — while the conversion is pending, and
+// for at least MINOR_FULL_MS in all. "out": the white gems flicker out as the chosen major glows up (MINOR_OUT_MS).
+// Worked out from what the tray last showed, so it plays the same however the colour was chosen (you, the
+// computer, or an online opponent).
+const MINOR_FULL_MS = 900, MINOR_OUT_MS = 1050;
+let minorConverting = 0;                        // the player whose cash-in colour is being chosen right now
+const minorAnim = {1:null, 2:null};             // { fullStart, outStart, color, offs }
+const minorSeen = {1:null, 2:null};             // majors the tray last showed, per player
+const minorAnimTimers = {1:null, 2:null};
+function minorCashAnim(player){
+  const now = performance.now();
+  const majors = state.vp[player].major;
+  const pending = minorConverting===player || !!(state.pendingMinorConversions && state.pendingMinorConversions.some(c=>c.player===player));
+  let a = minorAnim[player];
+  if(pending && !a){
+    // each white gem starts its flicker at its own moment (0–~300ms after the colour is chosen)
+    const offs = [0,1,2,3].map(i=>i*85 + Math.round(Math.random()*45));
+    for(let i=offs.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [offs[i],offs[j]] = [offs[j],offs[i]]; }
+    a = minorAnim[player] = { fullStart: now, outStart: 0, color: null, offs };
+  }
+  if(a && !pending && !a.color){
+    // the cash-in resolved: the new major is the one the tray hadn't shown yet
+    const prev = minorSeen[player] || [];
+    a.color = majors.find(c=>!prev.includes(c)) || null;
+    a.outStart = Math.max(now, a.fullStart + MINOR_FULL_MS);
+    if(!a.color){ minorAnim[player] = a = null; }
+  }
+  if(!a || (a.color && !majors.includes(a.color))){ minorAnim[player] = null; minorSeen[player] = majors.slice(); return { phase:null }; }
+  if(pending || now < a.outStart){
+    if(!pending) wake(player, a.outStart - now);
+    minorSeen[player] = majors.filter(c=>c!==a.color);
+    return { phase:"full", color:a.color, t0:a.fullStart };
+  }
+  if(now < a.outStart + MINOR_OUT_MS){
+    wake(player, a.outStart + MINOR_OUT_MS - now);
+    minorSeen[player] = majors.slice();
+    return { phase:"out", color:a.color, t0:a.outStart, offs:a.offs };
+  }
+  minorAnim[player] = null; minorSeen[player] = majors.slice();
+  return { phase:null };
+  function wake(p, ms){ clearTimeout(minorAnimTimers[p]); minorAnimTimers[p] = setTimeout(()=>render(), ms + 20); }
+}
 function grantMinorVP(player, chooser, n){
   const bucket = state.vp[player];
   n = n || 2;
@@ -2044,10 +2118,11 @@ function pzChoiceNote(player, allowed, missing){
 function flushPendingMinorConversions(cb){
   if(state.pendingMinorConversions.length===0) return false;
   const { player, chooser } = state.pendingMinorConversions.shift();
+  minorConverting = player;                 // (the tray keeps its 4 white gems lit until the colour is chosen)
   const chooserPlayer = chooser || opponentOf(player);
   const bucket = state.vp[player];
   const missing = MAJOR_VP.filter(c=>!bucket.major.includes(c));
-  if(missing.length===0){ cb(); return true; }
+  if(missing.length===0){ minorConverting = 0; cb(); return true; }
   const allowed = pzAllowedColors(player, missing);
   switchTimer(chooserPlayer);
   // in puzzle mode you play both sides, so name them by colour like the puzzle bar does
@@ -2058,6 +2133,7 @@ function flushPendingMinorConversions(cb){
     allowed.map(c=>({label:c.charAt(0).toUpperCase()+c.slice(1), value:c, color:MAJOR_HEX[c]})),
     (color)=>{
       bucket.major.push(color);
+      minorConverting = 0;
       logMsg(`Player ${player} converts 4 minor VP into a major ${color} VP, chosen by Player ${chooserPlayer}.`);
       checkWin(player);
       if(!state.winner) switchTimer(player);
@@ -3446,13 +3522,28 @@ function attachTileiconHoverGlow(cell, iconImgEl){
   });
 }
 
-// Purely cosmetic flourish: when hovering a piece sitting on a Yin/Yang tile, its 4 gems sweep
-// inward toward the piece, rotate one cardinal position (clockwise or counter-clockwise, picked
-// at random each time), then sweep back out to their normal distance — landing on the *next*
-// gem's old spot. Doesn't touch any game state; the tile's real primary/secondary colors are
+// Purely cosmetic flourish: when hovering a piece sitting on a Yin/Yang tile, its 4 gems sweep inward toward
+// the piece (or, with Diagonal Gems, outward through the compass point), rotate one position (clockwise or
+// counter-clockwise, picked at random each time), then settle back — landing on the *next* gem's old spot. Doesn't touch any game state; the tile's real primary/secondary colors are
 // unaffected, and everything reverts to the canonical layout on the next render regardless.
 // While a piece is gliding or its move is still resolving, hovering must not touch any piece: the gem spin
 // rewrites the piece's transform (restarting the glide slowly, with a twist) and hover-select redraws the board.
+// Gem layout on Yin/Yang spaces (Settings → Diagonal Gems). Compass: gems rest at N/E/S/W (81px out) and swing IN
+// mid-spin. Diagonal: they rest close on the diagonals (59px) and swing OUT through the compass point (81px).
+let gemsDiagonal = false;
+try{ gemsDiagonal = localStorage.getItem("duelismGemLayout") === "diagonal"; }catch(_){}
+function applyGemLayout(){ document.body.classList.toggle("gems-diag", gemsDiagonal); }
+function gemSpinBulge(){ return gemsDiagonal ? -0.373 : 0.27; }
+function setGemsDiagonal(on){
+  gemsDiagonal = !!on;
+  try{ localStorage.setItem("duelismGemLayout", gemsDiagonal ? "diagonal" : "compass"); }catch(_){}
+  applyGemLayout();
+  // clear any spin offsets left over from the other layout, so every gem sits at its resting place
+  document.querySelectorAll(".yyface").forEach(f=>{ f._spin = null; });
+  document.querySelectorAll(".yydot").forEach(d=>{ if(typeof setComposedTranslate==="function") setComposedTranslate(d, ""); });
+  if(typeof render==="function" && state) render();
+}
+if(document.body) applyGemLayout(); else document.addEventListener("DOMContentLoaded", applyGemLayout);
 function hoverQuiet(){ return performance.now() < pieceGlideUntil || (typeof moveLock!=="undefined" && moveLock); }
 function triggerGemSpin(cell, pieceEl){
     if(animationLevel<2) return;
@@ -3599,7 +3690,7 @@ function runSetupGemSpin(cell, steps){
 }
 
 function runSetupGemSpinSegment(spin){
-  const DURATION = 620, BULGE = 0.27;
+  const DURATION = 620, BULGE = gemSpinBulge();
   const dir = spin.segDir;
   const baseSteps = spin.netSteps;
   const start = performance.now();
@@ -3625,7 +3716,7 @@ function runSetupGemSpinSegment(spin){
 // rather than walking back. Every frame's transform is computed from the true accumulated angle,
 // so there's never an abrupt jump either mid-step or when it comes to rest.
 function runGemSpinSegment(spin){
-  const FORWARD_MS = 750, BULGE = 0.27;
+  const FORWARD_MS = 750, BULGE = gemSpinBulge();
   const dir = spin.segDir;
   const baseSteps = spin.netSteps;
   const start = performance.now();
@@ -4148,17 +4239,31 @@ function renderTray(player){
   // Two groups so that, in the side-by-side tray rows, the minor gems drop to their own line when space is short.
   const majGroup = document.createElement("div"); majGroup.className = "vpGroup";
   const minGroup = document.createElement("div"); minGroup.className = "vpGroup";
+  // Minor VP: four white gems on their own row, one lit per minor VP held. Reaching 4 lights all four
+  // (pulsing) while the cash-in is pending; then they flicker out as the chosen major glows up.
+  const nMinor = state.vp[player].minor;
+  const anim = minorCashAnim(player);            // { phase:"full"|"out"|null, color, t0 }
+  const since = (t0)=>`${-Math.round(performance.now() - t0)}ms`;   // keep animations in step across re-renders
   MAJOR_VP.forEach(color=>{
-    const dot = document.createElement("div"); dot.className="vpdot" + (state.vp[player].major.includes(color)?" on":"");
+    const held = state.vp[player].major.includes(color);
+    const hideNew = anim.phase==="full" && color===anim.color;          // not shown until the white gems give way
+    const dot = document.createElement("div"); dot.className="vpdot" + (held && !hideNew ? " on":"");
     dot.classList.add("vpgem-" + color);
+    if(anim.phase==="out" && color===anim.color){ dot.classList.add("glowup"); dot.style.animationDelay = since(anim.t0); }
     dot.title = color;
     majGroup.appendChild(dot);
   });
-  // Minor VP: three white gems, one lit per minor VP held (the fourth converts into a major).
-  const nMinor = state.vp[player].minor;
-  for(let i=0;i<3;i++){
-    const minorDot = document.createElement("div"); minorDot.className = "vpdot vpgem-white" + (nMinor > i ? " on" : "");
-    minorDot.title = `minor VP: ${nMinor} of 4`;
+  minGroup.classList.add("minorRow");
+  for(let i=0;i<4;i++){
+    const minorDot = document.createElement("div");
+    const full = anim.phase==="full";
+    minorDot.className = "vpdot vpgem-white" + ((full || nMinor > i) ? " on" : "");
+    if(full) minorDot.classList.add("cashin");             // steady glow while the colour is being chosen
+    else if(anim.phase==="out" && nMinor <= i){            // was lit as part of the 4, now going out
+      minorDot.classList.add("flickerout");
+      minorDot.style.animationDelay = `${-Math.round(performance.now() - anim.t0) + anim.offs[i]}ms`;   // each on its own start
+    }
+    minorDot.title = full ? "4 minor VP: converting into a major VP" : `minor VP: ${nMinor} of 4`;
     minGroup.appendChild(minorDot);
   }
   vpCol.appendChild(majGroup); vpCol.appendChild(minGroup);
@@ -4167,9 +4272,7 @@ function renderTray(player){
   body.appendChild(vpCol);
   el.appendChild(body);
 
-  const timerEl = document.createElement("div"); timerEl.className="timerDisplay"; timerEl.id=`timer-p${player}`;
-  timerEl.textContent = formatHMS(getPlayerElapsedMs(player));
-  el.appendChild(timerEl);
+  // (The per-player clock is no longer shown in the tray; its row now holds the minor VP gems.)
 }
 
 setInterval(()=>{
@@ -4205,6 +4308,9 @@ function showSettings(){
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:-8px;">
         <input type="checkbox" id="driftToggle" ${driftEnabled ? "checked":""}> Drifting Lights
       </label>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:-8px;">
+        <input type="checkbox" id="gemDiagToggle" ${gemsDiagonal ? "checked":""}> Diagonal Gems
+      </label>
       <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
         <span>Animation</span>
         <span class="ambient-level-label" id="animLevelLabel">${animLabels[animationLevel]}</span>
@@ -4228,6 +4334,7 @@ function showSettings(){
   document.getElementById("ambientSlider").oninput = (e)=> applyAmbientLevel(Number(e.target.value));
   document.getElementById("polarToggle").onchange = (e)=> setAurasEnabled(e.target.checked);
   document.getElementById("driftToggle").onchange = (e)=> setDriftEnabled(e.target.checked);
+  document.getElementById("gemDiagToggle").onchange = (e)=> setGemsDiagonal(e.target.checked);
   document.getElementById("animSlider").oninput = (e)=>{
     animationLevel = Number(e.target.value);
     document.body.classList.toggle("anim-off", animationLevel===0);
