@@ -172,6 +172,7 @@
     opacity:.16; filter:grayscale(1); transition:opacity .3s ease, filter .3s ease;
   }
   .vpdot.on{opacity:1; filter:none; }
+  .vpGroup{ display:contents; }               /* gems sit directly in the column/grid layouts (the tray rows group them) */
   .timerDisplay{
     margin-top:10px; font-size:12px; letter-spacing:.06em; color:var(--dim);
     font-variant-numeric:tabular-nums; text-align:center;
@@ -571,7 +572,8 @@
   .tray .unitCol{ flex-direction:row; gap:10px; }
   .tray .unitrow{ border-bottom:none; padding:0; grid-template-columns:12px auto 14px; gap:4px; }
   .tray .hp{ font-size:13px; white-space:nowrap; }
-  .tray .vpCol{ display:flex; flex-direction:row; gap:4px; }
+  .tray .vpCol{ display:flex; flex-direction:row; gap:4px; flex-wrap:wrap; justify-content:center; row-gap:3px; }
+  .tray .vpCol .vpGroup{ display:flex; flex-direction:row; gap:inherit; }
   .tray .vpdot{ width:16px; height:16px; }
   .tray.you{ outline:1px solid var(--gold); outline-offset:0; background:rgba(216,178,92,.08); }
 
@@ -597,7 +599,8 @@
   .tray .hp .hpval{ font-size:14px; }               /* ...keep just the number */
   .tray .swatch{ width:13px; height:13px; }
   .tray .hourglass{ font-size:12px; width:12px; height:12px; line-height:12px; }
-  .tray .vpCol{ display:flex; flex-direction:row; gap:2px; }
+  .tray .vpCol{ display:flex; flex-direction:row; gap:2px; flex-wrap:wrap; justify-content:center; row-gap:2px; }
+  .tray .vpCol .vpGroup{ display:flex; flex-direction:row; gap:inherit; }
   .tray .vpdot{ width:12px; height:12px; }
   /* Active-player frame drawn on a pseudo-element so it can reach 4px further up and down than the tray
      itself (clearing the VP gems) without changing the tray's size or the layout around it. */
@@ -1079,9 +1082,9 @@ const NAMED_CARDS = [
   { name:"Dark", special:false,
     text:"Choose one of your other pieces. It distributes 6 damage evenly to your opponent's pieces in the same column and row, then puts 2 damage on itself." },
   { name:"Evil", special:false,
-    text:"Your opponent gains a minor VP and chooses one of their own pieces. You then choose a second, different piece belonging to your opponent. Those two opponent pieces put 4 damage on each other." },
+    text:"Your opponent gains 1 minor VP and chooses one of their own pieces. You then choose a second, different piece belonging to your opponent. Those two opponent pieces put 3 damage on each other." },
   { name:"Life", special:false,
-    text:"If you can distribute all 4 HP among your pieces (in any combination), you must. If you have a minor VP available afterward, you choose whether to spend it to take another turn. If you can't distribute all 4 HP, you automatically take another turn instead, at no cost." },
+    text:"If you can distribute all 4 HP among your pieces (in any combination), you must. If you have 2 minor VP available afterward, you choose whether to spend them to take another turn. If you can't distribute all 4 HP, you automatically take another turn instead, at no cost." },
   { name:"Good", special:false,
     text:"Your opponent puts 4 damage on their piece with the most HP — if their pieces are tied, they choose which one. If this defeats it, the normal defeat effect is replaced: you always gain a genuine major VP (never wasted as a duplicate), but your opponent chooses which color." },
   { name:"Love", special:true,
@@ -1089,9 +1092,9 @@ const NAMED_CARDS = [
   { name:"Hate", special:false,
     text:"Tap one untapped piece per player. Divide 4 damage evenly to your opponent's piece(s) with the same affinity as the pieces that were tapped due to this effect." },
   { name:"Death", special:false,
-    text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, excess damage carries over into its reset — it rests with that much damage still on it instead of a full 8 HP. If this defeats a piece, the normal defeat effect is replaced: you gain a minor VP instead of a major VP, and you take another turn." },
+    text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, excess damage carries over into its reset — it rests with that much damage still on it instead of a full 8 HP. If this defeats a piece, the normal defeat effect is replaced: you gain 2 minor VP instead of a major VP, and you take another turn." },
   { name:"Law", special:true,
-    text:"Your opponent chooses one of their major VP and loses it, then gains a minor VP.",
+    text:"Your opponent chooses one of their major VP and loses it, then gains 2 minor VP.",
     specialText:"You cannot move to Law unless you have fewer major VP than your opponent." },
   { name:"Chaos", special:true,
     text:"Swap the HP of the piece that moved here with one of your other pieces. Take another turn.",
@@ -1200,16 +1203,14 @@ function newGame(){
   state = {
     board, units,
     current: 1,
-    vp: { 1: { major:[], minor:0 }, 2: { major:["black-white-placeholder"], minor:0 } }, // p2 starts w/ minor VP
+    vp: { 1: { major:[], minor:0 }, 2: { major:[], minor:1 } }, // Player 2 starts with 1 minor VP (moving second)
     winner: null,
     lightPending: {1:false, 2:false}, // whose NEXT move triggers Light's alt effect
     log: [],
     pendingMinorConversions: [],
   };
-  // Correct: minor VP represented as count, not placeholder array
-  state.vp = { 1:{ major:[], minor:0 }, 2:{ major:[], minor:1 } };
 
-  logMsg("New game. 4×4 board shuffled. Player 1 anchors on Yin tiles, Player 2 on Yang tiles. Player 2 begins with a minor VP.");
+  logMsg("New game. 4×4 board shuffled. Player 1 anchors on Yin tiles, Player 2 on Yang tiles. Player 1 moves first; Player 2 starts with 1 minor VP.");
   pendingExtraTurn = false;
   timerTotals = {1:0, 2:0};
   timerPlayer = null; timerStartMs = null;
@@ -1972,8 +1973,8 @@ function grantMajorVP(player, sourceColor, chosenAffinity){
   const vpColor = vpFor(sourceColor, chosenAffinity);
   const bucket = state.vp[player];
   if(bucket.major.includes(vpColor)){
-    grantMinorVP(player);
-    logMsg(`Player ${player} already has ${vpColor} major VP — gains a minor VP instead.`);
+    logMsg(`Player ${player} already has ${vpColor} major VP — gains 3 minor VP instead.`);
+    grantMinorVP(player, null, 3);
   } else {
     bucket.major.push(vpColor);
     logMsg(`Player ${player} gains ${vpColor} major VP.`);
@@ -1987,7 +1988,7 @@ function grantMajorVPChosen(winner, chooser, onDone){
   if(missing.length===0){
     // Degenerate case — winner already holds all 6 majors, meaning they'd already have won.
     // Fall back to a minor VP, letting the same chooser pick if it triggers a conversion.
-    grantMinorVP(winner, chooser);
+    grantMinorVP(winner, chooser, 3);
     onDone();
     return;
   }
@@ -2007,16 +2008,22 @@ function grantMajorVPChosen(winner, chooser, onDone){
   );
 }
 
-function grantMinorVP(player, chooser){
+// Minor VP: 4 make a major. Most effects give 2, a duplicate-colour defeat gives 3, Evil gives 1.
+const MINOR_PER_MAJOR = 4;
+function grantMinorVP(player, chooser, n){
   const bucket = state.vp[player];
-  bucket.minor += 1;
-  if(bucket.minor>=2){
-    bucket.minor -= 2;
+  n = n || 2;
+  bucket.minor += n;
+  const word = n===1 ? "a minor VP" : `${n} minor VP`;
+  if(bucket.minor>=MINOR_PER_MAJOR){
     const conversionChooser = chooser || opponentOf(player);
-    state.pendingMinorConversions.push({ player, chooser: conversionChooser });
-    logMsg(`Player ${player} banks a second minor VP — conversion into a major VP is pending (Player ${conversionChooser} will choose the color before the turn advances).`);
+    while(bucket.minor>=MINOR_PER_MAJOR){
+      bucket.minor -= MINOR_PER_MAJOR;
+      state.pendingMinorConversions.push({ player, chooser: conversionChooser });
+    }
+    logMsg(`Player ${player} gains ${word} and reaches ${MINOR_PER_MAJOR} — conversion into a major VP is pending (Player ${conversionChooser} will choose the color before the turn advances; ${bucket.minor} left over).`);
   } else {
-    logMsg(`Player ${player} gains a minor VP (now ${bucket.minor}).`);
+    logMsg(`Player ${player} gains ${word} (now ${bucket.minor} of ${MINOR_PER_MAJOR}).`);
   }
 }
 
@@ -2047,11 +2054,11 @@ function flushPendingMinorConversions(cb){
   const nm = (n)=> (typeof puzzle!=="undefined" && puzzle) ? (n===1 ? "White" : "Black") : `Player ${n}`;
   askChoice(
     `${nm(chooserPlayer)} — Choose ${nm(player)}'s Major VP`,
-    `${nm(player)} converted 2 minor VP into a major VP. ${nm(chooserPlayer)}, choose which major VP color ${nm(player)} receives.${pzChoiceNote(player, allowed, missing)}`,
+    `${nm(player)} converted 4 minor VP into a major VP. ${nm(chooserPlayer)}, choose which major VP color ${nm(player)} receives.${pzChoiceNote(player, allowed, missing)}`,
     allowed.map(c=>({label:c.charAt(0).toUpperCase()+c.slice(1), value:c, color:MAJOR_HEX[c]})),
     (color)=>{
       bucket.major.push(color);
-      logMsg(`Player ${player} converts 2 minor VP into a major ${color} VP, chosen by Player ${chooserPlayer}.`);
+      logMsg(`Player ${player} converts 4 minor VP into a major ${color} VP, chosen by Player ${chooserPlayer}.`);
       checkWin(player);
       if(!state.winner) switchTimer(player);
       cb();
@@ -2063,7 +2070,7 @@ function flushPendingMinorConversions(cb){
 
 function loseMinorVP(player){
   const bucket = state.vp[player];
-  if(bucket.minor>0){ bucket.minor -=1; logMsg(`Player ${player} loses a minor VP.`); return true; }
+  if(bucket.minor>=2){ bucket.minor -=2; logMsg(`Player ${player} spends 2 minor VP.`); return true; }
   return false;
 }
 
@@ -2077,7 +2084,7 @@ function checkWin(player){
 }
 
 function totalVP(player){
-  return state.vp[player].major.length + state.vp[player].minor;
+  return state.vp[player].major.length + state.vp[player].minor / MINOR_PER_MAJOR;
 }
 
 /* ============================= TURN / EFFECT ENGINE ============================= */
@@ -2266,7 +2273,7 @@ function runNamedCard(name, unit){
       break;
     }
     case "Evil": {
-      grantMinorVP(opp);
+      grantMinorVP(opp, null, 1);
       const oppChoices = unitsOf(opp);
       switchTimer(opp);
       askChoice("Evil — Opponent's Choice", `Player ${opp} gains a minor VP. Player ${opp}, choose one of your own pieces.`,
@@ -2274,11 +2281,11 @@ function runNamedCard(name, unit){
         (firstPick)=>{
           const secondChoices = unitsOf(opp).filter(u=>u!==firstPick);
           switchTimer(mover);
-          askChoice("Evil — Your Choice", `Player ${mover}, choose another of Player ${opp}'s pieces. The two chosen pieces put 4 damage on each other.`,
+          askChoice("Evil — Your Choice", `Player ${mover}, choose another of Player ${opp}'s pieces. The two chosen pieces put 3 damage on each other.`,
             secondChoices.map(u=>({label:`${cw(u.color)} piece (${u.hp} HP)`, value:u, color:COLOR_HEX[u.color]})),
             (secondPick)=>{
-              damage(firstPick, 4, secondPick.color, { from: secondPick }); damage(secondPick, 4, firstPick.color, { from: firstPick });
-              logMsg(`Evil: Player ${opp}'s ${cw(firstPick.color)} and ${cw(secondPick.color)} pieces each took 4 damage from each other.`);
+              damage(firstPick, 3, secondPick.color, { from: secondPick }); damage(secondPick, 3, firstPick.color, { from: firstPick });
+              logMsg(`Evil: Player ${opp}'s ${cw(firstPick.color)} and ${cw(secondPick.color)} pieces each took 3 damage from each other.`);
               endTurn();
             });
         });
@@ -2293,28 +2300,28 @@ function runNamedCard(name, unit){
       } else {
         distributeHP(mover, 4, ()=>{
           const bucket = state.vp[mover];
-          if(bucket.minor > 0){
+          if(bucket.minor >= 2){
             askChoice(
               "Life — Take Another Turn?",
-              "You've distributed all 4 HP. Lose a minor VP to take another turn?",
+              `You've distributed all 4 HP. Spend 2 minor VP to take another turn? (You have ${bucket.minor}.)`,
               [
-                { label:"Yes — lose a minor VP, take another turn", value:"yes" },
-                { label:"No — keep the minor VP, end turn normally", value:"no" },
+                { label:"Yes — spend 2 minor VP, take another turn", value:"yes" },
+                { label:"No — keep them, end turn normally", value:"no" },
               ],
               (choice)=>{
                 if(choice==="yes"){
                   loseMinorVP(mover);
                   pendingExtraTurn = true;
-                  logMsg(`Life: lost a minor VP to take another turn.`);
+                  logMsg(`Life: spent 2 minor VP to take another turn.`);
                 } else {
-                  logMsg(`Life: kept the minor VP; turn ends normally.`);
+                  logMsg(`Life: kept their minor VP; turn ends normally.`);
                 }
                 endTurn();
               },
               { hideCancel:true }
             );
           } else {
-            logMsg(`Life: distributed all 4 HP. No minor VP available to spend for another turn.`);
+            logMsg(`Life: distributed all 4 HP. Not enough minor VP (2 needed) to spend for another turn.`);
             endTurn();
           }
         });
@@ -2411,21 +2418,15 @@ function runNamedCard(name, unit){
       const applyDeath = (target)=>{
         const preHP = target.hp;
         const willDefeat = preHP > 0 && preHP <= 4;
-        const beforeMajorLen = state.vp[mover].major.length;
         // Excess damage carries over: the piece doesn't reset to a full 8 HP, it rests with
         // however much damage exceeded what was needed to defeat it (e.g. a piece at 3 HP takes
         // 4 damage — 1 damage is "excess" beyond the kill, so it resets to 8-1=7, not 8).
         const excess = willDefeat ? (4 - preHP) : 0;
         const resetHP = 8 - excess;
-        damage(target, 4, unit.color, willDefeat ? { resetHP } : {});
+        // Death replaces the defeat's VP with 2 minor VP (whether or not the colour would have been a duplicate).
+        damage(target, 4, unit.color, willDefeat ? { resetHP, forceMinor:true } : {});
         if(willDefeat){
-          const bucket = state.vp[mover];
-          if(bucket.major.length > beforeMajorLen){
-            // A major VP was just granted by the defeat — Death mandatorily replaces it with a minor VP.
-            bucket.major.pop();
-            grantMinorVP(mover);
-            logMsg(`Death: the defeat's major VP is replaced with a minor VP.`);
-          }
+          logMsg(`Death: the defeat gives 2 minor VP instead of a major VP.`);
           pendingExtraTurn = true;
           logMsg(`Death: takes another turn instead of the normal defeat effect.`);
         } else {
@@ -2444,15 +2445,15 @@ function runNamedCard(name, unit){
       break;
     }
     case "Law": {
-      // Your opponent chooses one of their major VP and loses it, then gains a minor VP. Normal cash-in
-      // rules apply: if that makes two minors, they convert into a major and the Law player picks the color.
+      // Your opponent chooses one of their major VP and loses it, then gains 2 minor VP. Normal cash-in
+      // rules apply: if that brings them to 4, they convert into a major and the Law player picks the color.
       const majors = state.vp[opp].major;
       const name = c=>c.charAt(0).toUpperCase() + c.slice(1);
       const finish = (color)=>{
         const i = majors.indexOf(color);
         if(i >= 0) majors.splice(i, 1);
-        logMsg(`Law: Player ${opp} gives up their ${cw(color)} major VP and gains a minor VP instead.`);
-        grantMinorVP(opp);
+        logMsg(`Law: Player ${opp} gives up their ${cw(color)} major VP and gains 2 minor VP instead.`);
+        grantMinorVP(opp, null, 2);
         endTurn();
       };
       if(!majors.length){
@@ -2463,7 +2464,7 @@ function runNamedCard(name, unit){
       } else {
         switchTimer(opp);
         askChoice("Law — Opponent's Choice",
-          `Player ${opp}, choose one of your major VP to give up. You gain a minor VP in its place.`,
+          `Player ${opp}, choose one of your major VP to give up. You gain 2 minor VP in its place.`,
           majors.map(c=>({ label: name(c), value: c, color: MAJOR_HEX[c] })),
           (c)=>{ switchTimer(mover); finish(c); },
           { hideCancel:true });
@@ -4144,16 +4145,23 @@ function renderTray(player){
   }
 
   const vpCol = document.createElement("div"); vpCol.className="vpCol";
+  // Two groups so that, in the side-by-side tray rows, the minor gems drop to their own line when space is short.
+  const majGroup = document.createElement("div"); majGroup.className = "vpGroup";
+  const minGroup = document.createElement("div"); minGroup.className = "vpGroup";
   MAJOR_VP.forEach(color=>{
     const dot = document.createElement("div"); dot.className="vpdot" + (state.vp[player].major.includes(color)?" on":"");
     dot.classList.add("vpgem-" + color);
     dot.title = color;
-    vpCol.appendChild(dot);
+    majGroup.appendChild(dot);
   });
-  const minorDot = document.createElement("div"); minorDot.className="vpdot" + (state.vp[player].minor>=1 ? " on":"");
-  minorDot.classList.add("vpgem-white");
-  minorDot.title = "minor VP";
-  vpCol.appendChild(minorDot);
+  // Minor VP: three white gems, one lit per minor VP held (the fourth converts into a major).
+  const nMinor = state.vp[player].minor;
+  for(let i=0;i<3;i++){
+    const minorDot = document.createElement("div"); minorDot.className = "vpdot vpgem-white" + (nMinor > i ? " on" : "");
+    minorDot.title = `minor VP: ${nMinor} of 4`;
+    minGroup.appendChild(minorDot);
+  }
+  vpCol.appendChild(majGroup); vpCol.appendChild(minGroup);
 
   body.appendChild(unitCol);
   body.appendChild(vpCol);
@@ -4583,7 +4591,7 @@ function showMultiplayer(entry){
     const inRoom = typeof mpRoomCode!=="undefined" && mpRoomCode;
     modal.innerHTML = `
       <h3>Play vs Computer — ${AI_LEVEL_LABEL[level]}</h3>
-      <p>Which side do you want? Player 1 moves first; Player 2 starts with a minor VP.</p>
+      <p>Which side do you want? Player 1 moves first; Player 2 starts with 1 minor VP.</p>
       <p style="font-size:12px; opacity:.75;">This ends your current game${inRoom ? " and leaves your online room" : ""}.</p>
     `;
     addOpts([
@@ -5146,21 +5154,21 @@ function showLog(){
 
 function showRules(){
   askChoice("Rules Summary", `
-    <b>Setup:</b> 16 tiles shuffled into a 4×4 grid. Player 1's three pieces (Red/Yellow/Blue) start on the three Yin tiles; Player 2's on the three Yang tiles. Player 2 starts with 1 minor VP.<br><br>
+    <b>Setup:</b> 16 tiles shuffled into a 4×4 grid. Player 1's three pieces (Red/Yellow/Blue) start on the three Yin tiles; Player 2's on the three Yang tiles. All pieces start at 8 HP. Player 1 moves first, so to balance that, Player 2 starts with 1 minor VP.<br><br>
     <b>Movement:</b> move one untapped piece to any empty tile sharing its row or column — but not a row/column already occupied by one of your <i>other</i> pieces. Moving taps the piece; when all of a player's pieces are tapped, they all untap. No legal moves → your tapped and untapped pieces swap states (tapped ones untap, untapped ones tap), and you continue your turn with a newly-untapped piece.<br><br>
     <b>Yin/Yang tiles:</b> each has 3 gems of one color and 1 gem of another — landing there deals 3 damage to the opponent's piece matching the first color and 1 damage to the opponent's piece matching the second.<br><br>
-    <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or minor VP if they already hold that color).<br><br>
-    <b>Minor VP:</b> 2 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent.<br><br>
+    <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or 3 minor VP if they already hold that color).<br><br>
+    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat gives 3, Death and Law give 2, Evil gives 1. Life can spend 2 for another turn.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
     <hr style="border:none;border-top:1px solid rgba(216,178,92,.35);margin:16px 0 12px">
     <b style="color:var(--gold);font-size:1.05em">Puzzle Mode</b><br><br>
     <b>Setup:</b> New Game → New Puzzle, then set three difficulty sliders and Build Puzzle. The board, every piece's HP and each side's major VP are random — each side already holds 1–4 major VP.<br><br>
     <b>Goal:</b> you play <i>both</i> sides, taking turns as usual. Each side has 1–3 more major VP colors to collect, shown with a ring in that color in the puzzle bar. (A side's held VP plus its goal is never more than 5, so there's always at least one Free color — though sometimes only one.) Every puzzle is built from a real route, so it can always be solved.<br><br>
     <b>Solved:</b> both sides have all of their goal colors. <b>Failed:</b> either side reaches 6 major VP — winning outright — before both goals are met.<br><br>
-    <b>All the normal rules apply.</b> When the other side picks a VP color for you — cashing in two minor VP, or the Good tile — it must pick a color you <i>don't</i> need whenever one is available, just as a real opponent would. Only when every color you're missing is a goal can it give you one. So stray minor VP are a real danger: each cash-in usually brings an unwanted major and a step closer to 6.<br><br>
+    <b>All the normal rules apply.</b> When the other side picks a VP color for you — cashing in four minor VP, or the Good tile — it must pick a color you <i>don't</i> need whenever one is available, just as a real opponent would. Only when every color you're missing is a goal can it give you one. So stray minor VP are a real danger: each cash-in usually brings an unwanted major and a step closer to 6.<br><br>
     <b>Efficiency score</b> (lower is better), shown in the middle of the puzzle bar — tap it for the breakdown:<br>
     • 4 per turn — a turn only counts when play passes to the other side (extra turns and "no legal moves" don't add one)<br>
-    • 8 per extra major VP and 4 per extra minor VP (beyond the goals)<br>
+    • 8 per extra major VP and 2 per extra minor VP (beyond the goals)<br>
     • 1 per HP of damage wasted on a defeat (overkill)<br>
     • 1 per HP of damage left on the board at the end<br><br>
     <b>Difficulty</b> — three sliders, each Low / Medium / High. Each side's six major colors fall into three buckets: <b>Held</b> (you have it but don't need it), <b>Need</b> (your goal) and <b>Free</b> (you don't have it and don't need it — the only safe place for a mistake, and where cashed-in minors go). <b>Length</b> — how much has to happen: the VP needed across both sides (about 1v1 when Short, 2v2 at Medium, 3v3 when Long), a little less when the pieces you must defeat start wounded. <b>Slack</b> — room for mistakes: how many Free colors each side has, less when bystander pieces start fragile. Tight leaves a side one Free color, so a single stray VP loses. <b>Imbalance</b> — how lopsided the puzzle is, White against Black and primary against secondary colors; Even is the balanced puzzle (one primary and one secondary in each bucket); Lopsided is less predictable rather than simply harder. Long, tight puzzles are the hardest. Every row runs easiest on the left to hardest on the right (Short → Long, Loose → Tight, Even → Lopsided), and <b>Random</b> picks a tier for that row when the puzzle is built. The label (e.g. H·H·M) lists Length · Slack · Imbalance by column: L = left (easiest), M = middle, H = right (hardest). The board layout is just variety, never part of the difficulty.<br><br>
@@ -5549,7 +5557,7 @@ function clone(E){
   };
 }
 
-// A fresh game exactly like the page's newGame() (shuffle, anchors on Yin/Yang, P2 starts with a minor VP).
+// A fresh game exactly like the page's newGame() (shuffle, anchors on Yin/Yang; Player 1 moves first, Player 2 starts with 1 minor VP).
 function newGameState(rng){
   rng = rng || Math.random;
   const tiles = [];
@@ -5571,7 +5579,7 @@ function newGameState(rng){
 /* ---------------------------------------------------------------- helpers */
 
 function unitAt(E, r, c){ for(let i=0;i<6;i++){ const u=E.units[i]; if(u.r===r && u.c===c) return u; } return null; }
-function totalVP(E, p){ return E.vp[p].maj.length + E.vp[p].min; }
+function totalVP(E, p){ return E.vp[p].maj.length + E.vp[p].min/4; }
 function tileAt(E, r, c){ return E.tiles[r*4+c]; }
 function findTile(E, name){
   const T = E.tiles;
@@ -5631,18 +5639,20 @@ function readyAll(E, p){
 function heal(u, amt){ u.hp = Math.min(8, u.hp + amt); }
 function checkWin(E, p){ if(E.vp[p].maj.length>=6) E.winner = p; }
 
-function grantMinorVP(E, p, chooser){
+// Minor VP: 4 make a major. Most effects give 2, a duplicate-colour defeat gives 3, Evil gives 1.
+function grantMinorVP(E, p, chooser, n){
   const b = E.vp[p];
-  b.min += 1;
-  if(b.min>=2){ b.min -= 2; E.pconv.push({ p, ch: chooser || opp(p) }); }
+  b.min += (n || 2);
+  while(b.min>=4){ b.min -= 4; E.pconv.push({ p, ch: chooser || opp(p) }); }
 }
 function grantMajorVP(E, p, srcColor, chosenAff){
   const vc = vpFor(srcColor, chosenAff);
   const b = E.vp[p];
-  if(b.maj.indexOf(vc)>=0) grantMinorVP(E, p);
+  if(b.maj.indexOf(vc)>=0) grantMinorVP(E, p, null, E.deathKO ? 2 : 3);
+  else if(E.deathKO) grantMinorVP(E, p, null, 2);
   else { b.maj.push(vc); checkWin(E, p); }
 }
-function loseMinorVP(E, p){ if(E.vp[p].min>0){ E.vp[p].min -= 1; return true; } return false; }
+function loseMinorVP(E, p){ if(E.vp[p].min>=2){ E.vp[p].min -= 2; return true; } return false; }
 
 /* Damage: a generator because Good's defeat lets a player choose the VP colour (a decision). */
 function* damage(E, ui, amt, srcColor, o){
@@ -5662,7 +5672,7 @@ function* defeat(E, ui, o){
   if(o.chooseAffinityFor){
     const chooser = o.chooseAffinityFor;
     const missing = MAJOR_VP.filter(c=>E.vp[winner].maj.indexOf(c)<0);
-    if(missing.length===0){ grantMinorVP(E, winner, chooser); return; }
+    if(missing.length===0){ grantMinorVP(E, winner, chooser, 3); return; }
     const k = yield { p: chooser, kind:"vpcolor", opts: missing };
     E.vp[winner].maj.push(missing[k]);
     E.nChosen = (E.nChosen||0) + 1;          // a colour picked by the other side (Good)
@@ -5756,15 +5766,15 @@ function* named(E, name, ui){
       break;
     }
     case "Evil": {
-      grantMinorVP(E, o);
+      grantMinorVP(E, o, null, 1);
       const k1 = yield { p:o, kind:"evil1", opts:theirs.slice() };
       const first = theirs[k1];
       const second = theirs.filter(i=>i!==first);
       const k2 = yield { p:mover, kind:"evil2", opts:second };
       const sp = second[k2];
       const fc = E.units[first].col, sc = E.units[sp].col;
-      yield* damage(E, first, 4, sc);
-      yield* damage(E, sp, 4, fc);
+      yield* damage(E, first, 3, sc);
+      yield* damage(E, sp, 3, fc);
       yield* endTurn(E);
       break;
     }
@@ -5782,7 +5792,7 @@ function* named(E, name, ui){
           heal(E.units[pieces[k]], 1);
           remaining--;
         }
-        if(E.vp[mover].min > 0){
+        if(E.vp[mover].min >= 2){
           const k = yield { p:mover, kind:"lifeturn", opts:["yes","no"] };
           if(k===0){ loseMinorVP(E, mover); E.extra = true; }
         }
@@ -5851,25 +5861,22 @@ function* named(E, name, ui){
       else target = tied[0];
       const pre = E.units[target].hp;
       const willDefeat = pre>0 && pre<=4;
-      const beforeLen = E.vp[mover].maj.length;
       const excess = willDefeat ? (4-pre) : 0;
+      if(willDefeat) E.deathKO = true;
       yield* damage(E, target, 4, u.col, willDefeat ? { resetHP: 8-excess } : {});
-      if(willDefeat){
-        const b = E.vp[mover];
-        if(b.maj.length > beforeLen){ b.maj.pop(); grantMinorVP(E, mover); }
-        E.extra = true;
-      }
+      E.deathKO = false;
+      if(willDefeat) E.extra = true;
       yield* endTurn(E);
       break;
     }
     case "Law": {
-      // Your opponent chooses one of their major VP and loses it, then gains a minor VP (normal cash-in rules:
-      // a second minor converts into a major at once, with the Law player choosing the color).
+      // Your opponent chooses one of their major VP and loses it, then gains 2 minor VP (normal cash-in rules:
+      // reaching 4 converts into a major at once, with the Law player choosing the color).
       const maj = E.vp[o].maj;
       if(maj.length){
         const k = maj.length > 1 ? (yield { p:o, kind:"lawmajor", opts:maj.slice() }) : 0;
         maj.splice(k, 1);
-        grantMinorVP(E, o);
+        grantMinorVP(E, o, null, 2);
       }
       yield* endTurn(E);
       break;
@@ -5910,7 +5917,6 @@ const api = { clone, newGameState, legalMoves, allMoves, runTurn, startTurn, tot
 if(typeof module!=="undefined" && module.exports) module.exports = api;
 root.DuelEngine = api;
 })(typeof globalThis!=="undefined" ? globalThis : this);
-
 </script>
 <script id="duelAiSrc">
 /* Duelism computer opponent: alpha-beta search over whole turns on top of the pure rules engine
@@ -5934,7 +5940,7 @@ const { runTurn, allMoves, legalMoves, opp, IDX, MAJOR_VP, vpFor } = DE;
  * Tuned offline by self-play — see tune2.js. */
 const DEFAULT_WEIGHTS = {
   major: 100,      // each major VP
-  minor: 52.8,     // a minor VP (two convert into a major)
+  minor: 26.4,     // a minor VP (four convert into a major)
   // value of each point of health, from the 1st (0->1 HP) to the 8th (7->8 HP). Big d5: being pushed
   // into kill range (<=4) is what really hurts; the first point or two off a healthy piece costs little,
   // so the computer prefers concentrating damage over spreading it.
@@ -6471,7 +6477,7 @@ async function aiStart(level, humanPlayer){
    Every puzzle is built from a real route the engine played, so a solution always exists.
    Efficiency score (lower is better):
      4 per turn (a turn only counts when control passes to the other side; extra-turn effects and
-       no-legal-moves swaps don't add one) + 8 per extra major VP + 4 per extra minor VP
+       no-legal-moves swaps don't add one) + 8 per extra major VP + 2 per extra minor VP
      + 1 per HP of damage wasted on a defeat (overkill) + 1 per HP of damage left on the board.
    Sharing: "Duelism Puzzle (score): link" — the link opens the same starting position with that score
    as the target; the score turns from white through yellow and orange to red as you approach it. */
@@ -6485,7 +6491,7 @@ const PZ = {
     const extraMin = [1,2].reduce((n,p)=>n + Math.max(0, state.vp[p].minor - puzzle.startMinor[p]), 0);
     const board = state.units.reduce((n,u)=>n + (8 - u.hp), 0);
     const parts = { turns: puzzle.turns, extraMaj, extraMin, wasted: puzzle.wasted, board };
-    parts.score = 4*parts.turns + 8*extraMaj + 4*extraMin + parts.wasted + board;
+    parts.score = 4*parts.turns + 8*extraMaj + 2*extraMin + parts.wasted + board;
     return parts;
   },
 };
@@ -6859,7 +6865,7 @@ function pzBreakdownHtml(b){
   return `<table class="pzBreak">
     <tr><td>Turns</td><td>${b.turns} × 4</td><td>${4*b.turns}</td></tr>
     <tr><td>Extra major VP</td><td>${b.extraMaj} × 8</td><td>${8*b.extraMaj}</td></tr>
-    <tr><td>Extra minor VP</td><td>${b.extraMin} × 4</td><td>${4*b.extraMin}</td></tr>
+    <tr><td>Extra minor VP</td><td>${b.extraMin} × 2</td><td>${2*b.extraMin}</td></tr>
     <tr><td>Wasted damage</td><td>${b.wasted} HP</td><td>${b.wasted}</td></tr>
     <tr><td>Damage on the board</td><td>${b.board} HP</td><td>${b.board}</td></tr>
     <tr class="tot"><td>Efficiency score</td><td></td><td>${b.score}</td></tr></table>`;
