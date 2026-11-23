@@ -1126,10 +1126,10 @@ const NAMED_CARDS = [
   { name:"Death", special:false,
     text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, excess damage carries over into its reset — it rests with that much damage still on it instead of a full 8 HP. If this defeats a piece, the normal defeat effect is replaced: you gain 2 minor VP instead of a major VP, and you take another turn." },
   { name:"Law", special:true,
-    text:"Your opponent chooses one of their major VP and loses it, then gains 2 minor VP.",
-    specialText:"You cannot move to Law unless you have fewer major VP than your opponent." },
+    text:"Your opponent loses 1 minor VP and you gain 1 minor VP.",
+    specialText:"You cannot move to Law unless you have fewer minor VP than your opponent." },
   { name:"Chaos", special:true,
-    text:"Swap the HP of the piece that moved here with one of your other pieces. Take another turn.",
+    text:"If possible, give up one of your major VP to make your opponent lose their major VP of the same color. Take another turn.",
     specialText:"You cannot move to Chaos unless you have no other legal moves." },
 ];
 
@@ -1333,9 +1333,9 @@ function legalMovesFor(unit){
   if(lawPos){
     const hasLawMove = moves.some(m=>m.r===lawPos.r && m.c===lawPos.c);
     if(hasLawMove){
-      // Law ("You cannot move to Law unless you have fewer major VP than your opponent") — this also
-      // guarantees the opponent has a major VP for Law's effect to take.
-      const qualifies = state.vp[unit.player].major.length < state.vp[opponentOf(unit.player)].major.length;
+      // Law ("You cannot move to Law unless you have fewer minor VP than your opponent") — this also
+      // guarantees the opponent has a minor VP for Law's effect to take.
+      const qualifies = state.vp[unit.player].minor < state.vp[opponentOf(unit.player)].minor;
       if(!qualifies){
         moves = moves.filter(m => !(m.r===lawPos.r && m.c===lawPos.c));
       }
@@ -2005,8 +2005,8 @@ function grantMajorVP(player, sourceColor, chosenAffinity){
   const vpColor = vpFor(sourceColor, chosenAffinity);
   const bucket = state.vp[player];
   if(bucket.major.includes(vpColor)){
-    logMsg(`Player ${player} already has ${vpColor} major VP — gains 3 minor VP instead.`);
-    grantMinorVP(player, null, 3);
+    logMsg(`Player ${player} already has ${vpColor} major VP — gains 2 minor VP instead.`);
+    grantMinorVP(player, null, 2);
   } else {
     bucket.major.push(vpColor);
     logMsg(`Player ${player} gains ${vpColor} major VP.`);
@@ -2020,7 +2020,7 @@ function grantMajorVPChosen(winner, chooser, onDone){
   if(missing.length===0){
     // Degenerate case — winner already holds all 6 majors, meaning they'd already have won.
     // Fall back to a minor VP, letting the same chooser pick if it triggers a conversion.
-    grantMinorVP(winner, chooser, 3);
+    grantMinorVP(winner, chooser, 2);
     onDone();
     return;
   }
@@ -2040,7 +2040,7 @@ function grantMajorVPChosen(winner, chooser, onDone){
   );
 }
 
-// Minor VP: 4 make a major. Most effects give 2, a duplicate-colour defeat gives 3, Evil gives 1.
+// Minor VP: 4 make a major. Most effects (including a duplicate-colour defeat) give 2; Evil gives 1.
 const MINOR_PER_MAJOR = 4;
 // Tray display of a cash-in. "full": the 4 white gems are lit and pulsing — while the conversion is pending, and
 // for at least MINOR_FULL_MS in all. "out": the white gems flicker out as the chosen major glows up (MINOR_OUT_MS).
@@ -2521,47 +2521,42 @@ function runNamedCard(name, unit){
       break;
     }
     case "Law": {
-      // Your opponent chooses one of their major VP and loses it, then gains 2 minor VP. Normal cash-in
-      // rules apply: if that brings them to 4, they convert into a major and the Law player picks the color.
-      const majors = state.vp[opp].major;
-      const name = c=>c.charAt(0).toUpperCase() + c.slice(1);
-      const finish = (color)=>{
-        const i = majors.indexOf(color);
-        if(i >= 0) majors.splice(i, 1);
-        logMsg(`Law: Player ${opp} gives up their ${cw(color)} major VP and gains 2 minor VP instead.`);
-        grantMinorVP(opp, null, 2);
-        endTurn();
-      };
-      if(!majors.length){
-        logMsg(`Law: Player ${opp} has no major VP to give up.`);   // the movement rule should prevent this
-        endTurn();
-      } else if(majors.length === 1){
-        finish(majors[0]);
+      // Your opponent loses 1 minor VP and you gain 1 minor VP. (The gate means they always have one, and you end
+      // on at most 3, so Law never triggers a cash-in.)
+      if(state.vp[opp].minor > 0){
+        state.vp[opp].minor -= 1;
+        logMsg(`Law: Player ${opp} loses a minor VP (now ${state.vp[opp].minor}).`);
+        grantMinorVP(mover, null, 1);
       } else {
-        switchTimer(opp);
-        askChoice("Law — Opponent's Choice",
-          `Player ${opp}, choose one of your major VP to give up. You gain 2 minor VP in its place.`,
-          majors.map(c=>({ label: name(c), value: c, color: MAJOR_HEX[c] })),
-          (c)=>{ switchTimer(mover); finish(c); },
-          { hideCancel:true });
+        logMsg(`Law: Player ${opp} has no minor VP to lose.`);   // the movement rule should prevent this
       }
+      endTurn();
       break;
     }
     case "Chaos": {
-      // Swap the HP of the piece that moved here with one of your other pieces. Take another turn.
-      const myOthers = unitsOf(mover).filter(u=>u!==unit);
+      // If possible, give up one of your major VP to make your opponent lose their major VP of the same color. Take
+      // another turn. Options (same order as the engine): each of your majors that your opponent also holds. With
+      // only one, it happens without asking.
+      const mine = state.vp[mover], theirs = state.vp[opp];
+      const name = c=>c.charAt(0).toUpperCase() + c.slice(1);
+      const shared = mine.major.filter(c=>theirs.major.includes(c));
+      const opts = shared.map(c=>({ label:`Give up your ${name(c)} major — they lose theirs`, value:c, color:MAJOR_HEX[c] }));
+      const done = ()=>{ pendingExtraTurn = true; endTurn(); };
+      if(!opts.length){
+        logMsg(`Chaos: no major VP color in common to trade away. Takes another turn.`);
+        done();
+        break;
+      }
+      const trade = (v)=>{
+          mine.major.splice(mine.major.indexOf(v), 1); theirs.major.splice(theirs.major.indexOf(v), 1);
+          logMsg(`Chaos: Player ${mover} gives up their ${cw(v)} major VP; Player ${opp} loses theirs too. Takes another turn.`);
+          done();
+      };
+      if(opts.length === 1){ trade(opts[0].value); break; }
       askChoice(
         "Chaos",
-        "Swap the HP of the piece that moved here with one of your other pieces.",
-        myOthers.map(o=>({ label:`Your ${cw(unit.color)} (${unit.hp} HP) ⇄ your ${cw(o.color)} (${o.hp} HP)`, value:o, color:COLOR_HEX[o.color] })),
-        (o)=>{
-          const t = unit.hp; unit.hp = o.hp; o.hp = t;
-          logMsg(`Chaos: swapped HP — ${cw(unit.color)} now ${unit.hp} HP, ${cw(o.color)} now ${o.hp} HP. Takes another turn.`);
-          pendingExtraTurn = true;
-          endTurn();
-        },
-        { choiceCells: myOthers.map(o=>({r:o.r,c:o.c})).concat([{r:unit.r,c:unit.c}]) }
-      );
+        "Give up one of your major VP; your opponent loses theirs of the same color. Then take another turn.",
+        opts, trade, { hideCancel:true });
       break;
     }
     default:
@@ -5264,8 +5259,8 @@ function showRules(){
     <b>Setup:</b> 16 tiles shuffled into a 4×4 grid. Player 1's three pieces (Red/Yellow/Blue) start on the three Yin tiles; Player 2's on the three Yang tiles. All pieces start at 8 HP. Player 1 moves first, so to balance that, Player 2 starts with 1 minor VP.<br><br>
     <b>Movement:</b> move one untapped piece to any empty tile sharing its row or column — but not a row/column already occupied by one of your <i>other</i> pieces. Moving taps the piece; when all of a player's pieces are tapped, they all untap. No legal moves → your tapped and untapped pieces swap states (tapped ones untap, untapped ones tap), and you continue your turn with a newly-untapped piece.<br><br>
     <b>Yin/Yang tiles:</b> each has 3 gems of one color and 1 gem of another — landing there deals 3 damage to the opponent's piece matching the first color and 1 damage to the opponent's piece matching the second.<br><br>
-    <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or 3 minor VP if they already hold that color).<br><br>
-    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat gives 3, Death and Law give 2, Evil gives 1. Life can spend 2 for another turn.<br><br>
+    <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or 2 minor VP if they already hold that color).<br><br>
+    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil and Law give 1. Life can spend 2 for another turn.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
     <hr style="border:none;border-top:1px solid rgba(216,178,92,.35);margin:16px 0 12px">
     <b style="color:var(--gold);font-size:1.05em">Puzzle Mode</b><br><br>
@@ -5725,8 +5720,8 @@ function legalMoves(E, ui){
   }
   const law = findTile(E, "Law");
   if(law>=0 && moves.indexOf(law)>=0){
-    // "You cannot move to Law unless you have fewer major VP than your opponent" (so they always have one to lose)
-    if(!(E.vp[u.p].maj.length < E.vp[opp(u.p)].maj.length)) moves = moves.filter(m=>m!==law);
+    // "You cannot move to Law unless you have fewer minor VP than your opponent" (so they always have one to lose)
+    if(!(E.vp[u.p].min < E.vp[opp(u.p)].min)) moves = moves.filter(m=>m!==law);
   }
   return moves;
 }
@@ -5746,7 +5741,7 @@ function readyAll(E, p){
 function heal(u, amt){ u.hp = Math.min(8, u.hp + amt); }
 function checkWin(E, p){ if(E.vp[p].maj.length>=6) E.winner = p; }
 
-// Minor VP: 4 make a major. Most effects give 2, a duplicate-colour defeat gives 3, Evil gives 1.
+// Minor VP: 4 make a major. Most effects (including a duplicate-colour defeat) give 2; Evil gives 1.
 function grantMinorVP(E, p, chooser, n){
   const b = E.vp[p];
   b.min += (n || 2);
@@ -5755,7 +5750,7 @@ function grantMinorVP(E, p, chooser, n){
 function grantMajorVP(E, p, srcColor, chosenAff){
   const vc = vpFor(srcColor, chosenAff);
   const b = E.vp[p];
-  if(b.maj.indexOf(vc)>=0) grantMinorVP(E, p, null, E.deathKO ? 2 : 3);
+  if(b.maj.indexOf(vc)>=0) grantMinorVP(E, p, null, 2);
   else if(E.deathKO) grantMinorVP(E, p, null, 2);
   else { b.maj.push(vc); checkWin(E, p); }
 }
@@ -5779,7 +5774,7 @@ function* defeat(E, ui, o){
   if(o.chooseAffinityFor){
     const chooser = o.chooseAffinityFor;
     const missing = MAJOR_VP.filter(c=>E.vp[winner].maj.indexOf(c)<0);
-    if(missing.length===0){ grantMinorVP(E, winner, chooser, 3); return; }
+    if(missing.length===0){ grantMinorVP(E, winner, chooser, 2); return; }
     const k = yield { p: chooser, kind:"vpcolor", opts: missing };
     E.vp[winner].maj.push(missing[k]);
     E.nChosen = (E.nChosen||0) + 1;          // a colour picked by the other side (Good)
@@ -5977,23 +5972,21 @@ function* named(E, name, ui){
       break;
     }
     case "Law": {
-      // Your opponent chooses one of their major VP and loses it, then gains 2 minor VP (normal cash-in rules:
-      // reaching 4 converts into a major at once, with the Law player choosing the color).
-      const maj = E.vp[o].maj;
-      if(maj.length){
-        const k = maj.length > 1 ? (yield { p:o, kind:"lawmajor", opts:maj.slice() }) : 0;
-        maj.splice(k, 1);
-        grantMinorVP(E, o, null, 2);
-      }
+      // Your opponent loses 1 minor VP and you gain 1 minor VP (never a cash-in: you end on at most 3).
+      if(E.vp[o].min > 0){ E.vp[o].min -= 1; grantMinorVP(E, mover, null, 1); }
       yield* endTurn(E);
       break;
     }
     case "Chaos": {
-      // Swap the HP of the piece that moved here with one of your other pieces. Take another turn.
-      const others = mine.filter(i=>i!==ui);
-      const k = yield { p:mover, kind:"chaos", opts:others };
-      const a = E.units[ui], b = E.units[others[k]];
-      const t = a.hp; a.hp = b.hp; b.hp = t;
+      // If possible, give up one of your major VP to make your opponent lose their major VP of the same color.
+      // Take another turn. Options: your majors they also hold (asked only when there's more than one).
+      const mv = E.vp[mover], ov = E.vp[o];
+      const opts = mv.maj.filter(c=>ov.maj.indexOf(c)>=0);
+      if(opts.length){
+        const k = opts.length > 1 ? (yield { p:mover, kind:"chaos", opts }) : 0;
+        const v = opts[k];
+        mv.maj.splice(mv.maj.indexOf(v), 1); ov.maj.splice(ov.maj.indexOf(v), 1);
+      }
       E.extra = true;
       yield* endTurn(E);
       break;
