@@ -1129,7 +1129,7 @@ const NAMED_CARDS = [
     text:"Your opponent loses 1 minor VP and you gain 1 minor VP.",
     specialText:"You cannot move to Law unless you have fewer minor VP than your opponent." },
   { name:"Chaos", special:true,
-    text:"If possible, give up one of your major VP to make your opponent lose their major VP of the same color. Take another turn.",
+    text:"If you and your opponent hold any of the same major VP colors, choose one of them: you both lose that major VP. Take another turn.",
     specialText:"You cannot move to Chaos unless you have no other legal moves." },
 ];
 
@@ -2540,7 +2540,7 @@ function runNamedCard(name, unit){
       const mine = state.vp[mover], theirs = state.vp[opp];
       const name = c=>c.charAt(0).toUpperCase() + c.slice(1);
       const shared = mine.major.filter(c=>theirs.major.includes(c));
-      const opts = shared.map(c=>({ label:`Give up your ${name(c)} major — they lose theirs`, value:c, color:MAJOR_HEX[c] }));
+      const opts = shared.map(c=>({ label:`${name(c)} — you both lose it`, value:c, color:MAJOR_HEX[c] }));
       const done = ()=>{ pendingExtraTurn = true; endTurn(); };
       if(!opts.length){
         logMsg(`Chaos: no major VP color in common to trade away. Takes another turn.`);
@@ -2555,7 +2555,7 @@ function runNamedCard(name, unit){
       if(opts.length === 1){ trade(opts[0].value); break; }
       askChoice(
         "Chaos",
-        "Give up one of your major VP; your opponent loses theirs of the same color. Then take another turn.",
+        "Choose a major VP color you both hold: you both lose that major VP. Then take another turn.",
         opts, trade, { hideCancel:true });
       break;
     }
