@@ -719,10 +719,10 @@
   }
   #tipPanel.show{ display:block; }
   #tipPanel.overPeek{ z-index:60; pointer-events:none; }
-  #tipPanel .dname{ font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-bottom:5px; }
-  #tipPanel .dtext{ font-size:12.5px; line-height:1.4; color:var(--ink); }
-  #tipPanel .dspecial{ font-size:11.5px; line-height:1.35; color:var(--dim); font-style:italic; margin-top:5px; }
-  #tipPanel .dmini{ display:flex; gap:6px; align-items:center; font-size:12.5px; color:var(--ink); margin-top:5px; }
+  #tipPanel .dname{ font-size:calc(12px * var(--tip-k, 1)); letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-bottom:5px; }
+  #tipPanel .dtext{ font-size:calc(12.5px * var(--tip-k, 1)); line-height:1.4; color:var(--ink); }
+  #tipPanel .dspecial{ font-size:calc(11.5px * var(--tip-k, 1)); line-height:1.35; color:var(--dim); font-style:italic; margin-top:5px; }
+  #tipPanel .dmini{ display:flex; gap:6px; align-items:center; font-size:calc(12.5px * var(--tip-k, 1)); color:var(--ink); margin-top:5px; }
   #tipPanel .chip{ width:10px; height:10px; border-radius:50%; display:inline-block; flex:0 0 auto; }
   .cell.lp-active{ z-index:2; }
   #tooltip{ display:none !important; }
@@ -1110,27 +1110,27 @@ const YINYANG_TILES = [
 const NAMED_CARDS = [
   { name:"Light", special:false,
     text:"Put 1 damage on each of your opponent's pieces.",
-    specialText:"Their next piece to move puts 1 damage on each of your pieces instead of the normal effect." },
+    specialText:"Your opponent's next move puts 1 damage on each of your pieces instead of its normal effect." },
   { name:"Dark", special:false,
-    text:"Choose one of your other pieces. It distributes 6 damage evenly to your opponent's pieces in the same column and row, then puts 2 damage on itself." },
+    text:"Choose one of your other pieces. It splits 6 damage evenly among your opponent's pieces in its row and column, then takes 2 damage itself." },
   { name:"Evil", special:false,
-    text:"Your opponent gains 1 minor VP and chooses one of their own pieces. You then choose a second, different piece belonging to your opponent. Those two opponent pieces put 3 damage on each other." },
+    text:"Your opponent gains 1 minor VP and chooses one of their pieces. You choose another of their pieces. Those two pieces put 3 damage on each other." },
   { name:"Life", special:false,
-    text:"If you can distribute all 4 HP among your pieces (in any combination), you must. If you have 2 minor VP available afterward, you choose whether to spend them to take another turn. If you can't distribute all 4 HP, you automatically take another turn instead, at no cost." },
+    text:"Heal 4 HP, split among your pieces however you like. Then you may spend 2 minor VP to take another turn. If your pieces are missing fewer than 4 HP, take another turn instead." },
   { name:"Good", special:false,
-    text:"Your opponent puts 4 damage on their piece with the most HP — if their pieces are tied, they choose which one. If this defeats it, the normal defeat effect is replaced: you always gain a genuine major VP (never wasted as a duplicate), but your opponent chooses which color." },
+    text:"Your opponent puts 4 damage on their piece with the most HP. If this defeats it, you gain a major VP in a color you don't have yet, chosen by your opponent." },
   { name:"Love", special:true,
-    text:"", specialText:"Swap positions with your opponent's piece with the same affinity, then resolve on the new space." },
+    text:"", specialText:"Swap places with your opponent's piece of the same color, then resolve the space you land on." },
   { name:"Hate", special:false,
-    text:"Tap one untapped piece per player. Divide 4 damage evenly to your opponent's piece(s) with the same affinity as the pieces that were tapped due to this effect." },
+    text:"Tap one of your untapped pieces and one of your opponent's. Your opponent's pieces of those two colors split 4 damage." },
   { name:"Death", special:false,
-    text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, excess damage carries over into its reset — it rests with that much damage still on it instead of a full 8 HP. If this defeats a piece, the normal defeat effect is replaced: you gain 2 minor VP instead of a major VP, and you take another turn." },
+    text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, it resets with the leftover damage still on it, you gain 2 minor VP instead of a major VP, and you take another turn." },
   { name:"Law", special:true,
-    text:"Your opponent loses 1 minor VP and you gain 1 minor VP.",
-    specialText:"You cannot move to Law unless you have fewer minor VP than your opponent." },
+    text:"Your opponent loses 1 minor VP and you gain 1.",
+    specialText:"You can only move to Law if you have fewer minor VP than your opponent." },
   { name:"Chaos", special:true,
     text:"If you and your opponent hold any of the same major VP colors, choose one of them: you both lose that major VP. Take another turn.",
-    specialText:"You cannot move to Chaos unless you have no other legal moves." },
+    specialText:"You can only move to Chaos if you have no other legal move." },
 ];
 
 // Simple single-color line-art per named card, shown below the tile name.
@@ -5260,6 +5260,7 @@ function showRules(){
     <b>Movement:</b> move one untapped piece to any empty tile sharing its row or column — but not a row/column already occupied by one of your <i>other</i> pieces. Moving taps the piece; when all of a player's pieces are tapped, they all untap. No legal moves → your tapped and untapped pieces swap states (tapped ones untap, untapped ones tap), and you continue your turn with a newly-untapped piece.<br><br>
     <b>Yin/Yang tiles:</b> each has 3 gems of one color and 1 gem of another — landing there deals 3 damage to the opponent's piece matching the first color and 1 damage to the opponent's piece matching the second.<br><br>
     <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or 2 minor VP if they already hold that color).<br><br>
+    <b>Ties:</b> if an effect targets the piece with the most or least HP and pieces are tied, whoever is putting the damage on chooses.<br><br>
     <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil and Law give 1. Life can spend 2 for another turn.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
     <hr style="border:none;border-top:1px solid rgba(216,178,92,.35);margin:16px 0 12px">
@@ -5531,6 +5532,14 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       ids.forEach(id=>{ const e=document.getElementById(id); if(!e) return; const q=e.getBoundingClientRect();
         l=Math.min(l,q.left); t=Math.min(t,q.top); r=Math.max(r,q.right); bt=Math.max(bt,q.bottom); });
       panel.style.left=l+"px"; panel.style.top=t+"px"; panel.style.width=(r-l)+"px"; panel.style.height=(bt-t)+"px";
+      fitPanel();
+    }
+    // On small screens a longer card can run past the box: shrink its text a little until it fits.
+    // (Only measurable while the panel is shown, so it runs again right after "show" is added.)
+    function fitPanel(){
+      let k = 1; panel.style.setProperty("--tip-k", k);
+      if(!panel.classList.contains("show")) return;
+      while(panel.scrollHeight > panel.clientHeight + 1 && k > 0.8){ k = Math.round((k - 0.03)*100)/100; panel.style.setProperty("--tip-k", k); }
     }
     function hidePanel(){
       panel.classList.remove("show"); shownHtml = null;
@@ -5553,7 +5562,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       document.querySelectorAll(".cell.lp-active").forEach(c=>c.classList.remove("lp-active"));
       panel.innerHTML = html; shownHtml = html; shownIdx = rc.r*4 + rc.c;
       placePanel();
-      panel.classList.add("show", "overPeek");
+      panel.classList.add("show", "overPeek"); fitPanel();
       cell.classList.add("lp-active");
       peekShown = true;
       peekT = setTimeout(()=>{ if(peekShown) placePanel(); }, 350);   // after any layout settle
@@ -5572,7 +5581,7 @@ window.addEventListener("resize", ()=>{ fitScaleWrap(); positionPeekButton(); })
       document.querySelectorAll(".cell.lp-active").forEach(c=>c.classList.remove("lp-active"));
       panel.innerHTML = html; shownHtml = html; shownIdx = idx;
       placePanel();
-      panel.classList.add("show");
+      panel.classList.add("show"); fitPanel();
       cell.classList.add("lp-active");
     }
     // The board is redrawn after every tap: keep the highlight on the same space, or drop the info if the tile changed.
