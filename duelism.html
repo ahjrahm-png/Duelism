@@ -1126,8 +1126,8 @@ const NAMED_CARDS = [
   { name:"Death", special:false,
     text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, it resets with the leftover damage still on it, you gain 2 minor VP instead of a major VP, and you take another turn." },
   { name:"Law", special:true,
-    text:"Your opponent loses 1 minor VP and you gain 1.",
-    specialText:"You can only move to Law if you have fewer minor VP than your opponent." },
+    text:"Make two choices, each one either: gain 1 minor VP, or your opponent loses 1 minor VP.",
+    specialText:"You can only move to Law if you have fewer major VP than your opponent." },
   { name:"Chaos", special:true,
     text:"If you and your opponent hold any of the same major VP colors, choose one of them: you both lose that major VP. Take another turn.",
     specialText:"You can only move to Chaos if you have no other legal move." },
@@ -1333,9 +1333,8 @@ function legalMovesFor(unit){
   if(lawPos){
     const hasLawMove = moves.some(m=>m.r===lawPos.r && m.c===lawPos.c);
     if(hasLawMove){
-      // Law ("You cannot move to Law unless you have fewer minor VP than your opponent") — this also
-      // guarantees the opponent has a minor VP for Law's effect to take.
-      const qualifies = state.vp[unit.player].minor < state.vp[opponentOf(unit.player)].minor;
+      // Law: "You can only move to Law if you have fewer major VP than your opponent."
+      const qualifies = state.vp[unit.player].major.length < state.vp[opponentOf(unit.player)].major.length;
       if(!qualifies){
         moves = moves.filter(m => !(m.r===lawPos.r && m.c===lawPos.c));
       }
@@ -2521,16 +2520,30 @@ function runNamedCard(name, unit){
       break;
     }
     case "Law": {
-      // Your opponent loses 1 minor VP and you gain 1 minor VP. (The gate means they always have one, and you end
-      // on at most 3, so Law never triggers a cash-in.)
-      if(state.vp[opp].minor > 0){
-        state.vp[opp].minor -= 1;
-        logMsg(`Law: Player ${opp} loses a minor VP (now ${state.vp[opp].minor}).`);
-        grantMinorVP(mover, null, 1);
-      } else {
-        logMsg(`Law: Player ${opp} has no minor VP to lose.`);   // the movement rule should prevent this
-      }
-      endTurn();
+      // Make two choices, each one either: gain 1 minor VP, or your opponent loses 1 minor VP. (Same option order
+      // as the engine: gain, then take. With nothing to take, the point is a gain without asking.) Gaining can
+      // reach 4 and cash in as normal, once the turn ends.
+      const point = (n)=>{
+        if(n > 2){ endTurn(); return; }
+        const apply = (v)=>{
+          if(v === "take"){
+            state.vp[opp].minor -= 1;
+            logMsg(`Law: Player ${opp} loses a minor VP (now ${state.vp[opp].minor}).`);
+          } else {
+            grantMinorVP(mover, null, 1);
+          }
+          render();
+          point(n + 1);
+        };
+        if(state.vp[opp].minor <= 0){ apply("gain"); return; }
+        askChoice(
+          `Law — choice ${n} of 2`,
+          `You have ${state.vp[mover].minor} minor VP; your opponent has ${state.vp[opp].minor}.`,
+          [ { label:"Gain 1 minor VP", value:"gain" },
+            { label:"Your opponent loses 1 minor VP", value:"take" } ],
+          apply, { hideCancel:true });
+      };
+      point(1);
       break;
     }
     case "Chaos": {
@@ -5729,8 +5742,8 @@ function legalMoves(E, ui){
   }
   const law = findTile(E, "Law");
   if(law>=0 && moves.indexOf(law)>=0){
-    // "You cannot move to Law unless you have fewer minor VP than your opponent" (so they always have one to lose)
-    if(!(E.vp[u.p].min < E.vp[opp(u.p)].min)) moves = moves.filter(m=>m!==law);
+    // "You can only move to Law if you have fewer major VP than your opponent."
+    if(!(E.vp[u.p].maj.length < E.vp[opp(u.p)].maj.length)) moves = moves.filter(m=>m!==law);
   }
   return moves;
 }
@@ -5981,8 +5994,13 @@ function* named(E, name, ui){
       break;
     }
     case "Law": {
-      // Your opponent loses 1 minor VP and you gain 1 minor VP (never a cash-in: you end on at most 3).
-      if(E.vp[o].min > 0){ E.vp[o].min -= 1; grantMinorVP(E, mover, null, 1); }
+      // Make two choices, each one either: gain 1 minor VP, or your opponent loses 1 minor VP. Options: "gain",
+      // "take" — asked only while the opponent has a minor to lose; otherwise the point is a gain.
+      for(let n=0;n<2;n++){
+        let v = "gain";
+        if(E.vp[o].min > 0){ const k = yield { p:mover, kind:"lawpoint", opts:["gain","take"] }; v = k ? "take" : "gain"; }
+        if(v === "take") E.vp[o].min -= 1; else grantMinorVP(E, mover, null, 1);
+      }
       yield* endTurn(E);
       break;
     }
