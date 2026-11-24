@@ -120,6 +120,9 @@
   .trayColTitle{ text-align:center; margin:0; }
   .trayHeader{ display:flex; flex-direction:column; align-items:center; margin-bottom:12px; gap:2px; }
   .trayHeader .trayColTitle{ margin:0; }
+  /* Build number under the title, so the copy in hand can be matched to the one published on GitHub. */
+  .appVersion{ display:block; font-family:system-ui, sans-serif; font-size:9px; font-weight:400; letter-spacing:.08em;
+    padding-left:0; line-height:1.2; color:var(--dim); opacity:.55; text-shadow:none; text-transform:none; }
   .btnPair{ display:flex; flex-direction:column; align-items:center; gap:8px; width:100%; }
   .stoneBtnCol{ display:flex; flex-direction:column; align-items:center; width:100%; }
   .sideBtn.stoneBtn{ aspect-ratio:423/118; }
@@ -844,7 +847,7 @@
   .overlay.peekable:not(.peeking){ cursor:pointer; }
   .overlay.peekable > .modal-wrap{ cursor:auto; }
   .tray-group{ position:relative; }
-  .trayTitle{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;
+  .trayTitle{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none;
     font-family:"Cinzel", serif; font-weight:700; font-size:30px; letter-spacing:.24em; padding-left:.24em; color:var(--gold);
     text-shadow:0 0 18px rgba(216,178,92,.35), 0 2px 0 rgba(0,0,0,.6); opacity:0; transition:opacity .7s ease; }
   .tray-group > .tray{ transition:opacity .7s ease .2s; }
@@ -969,7 +972,7 @@
   </div></div>
   <div class="trayCol">
     <div class="trayHeader">
-      <h1 class="trayColTitle">Duelism</h1>
+      <h1 class="trayColTitle">Duelism<span class="appVersion"></span></h1>
       <div class="btnPair">
         <button class="stoneBtn sideBtn" id="newGameBtn">New Game</button>
         <button class="stoneBtn sideBtn" id="optionsBtn">Options</button>
@@ -4174,6 +4177,9 @@ function animateTrayHp(el, from, to){
 
 // The title shows inside the stats tray as each new game begins (while the board's opening flourish
 // plays), then fades out as the players' stats fade in. A loaded or joined game shows stats right away.
+// Bump with every published change; shown small under the title.
+const APP_VERSION = "v1.0";
+document.querySelectorAll("h1.trayColTitle .appVersion").forEach(el=>{ el.textContent = APP_VERSION; });
 let gameStartedFlag = false;
 function isGameStarted(){
   if(gameStartedFlag) return true;
@@ -4186,7 +4192,9 @@ function isGameStarted(){
 function updatePreGame(){
   const grp = document.querySelector(".tray-group");
   if(grp && !grp.querySelector(".trayTitle")){
-    const t = document.createElement("div"); t.className = "trayTitle"; t.textContent = "Duelism"; grp.appendChild(t);
+    const t = document.createElement("div"); t.className = "trayTitle"; t.textContent = "Duelism";
+    const v = document.createElement("span"); v.className = "appVersion"; v.textContent = APP_VERSION; t.appendChild(v);
+    grp.appendChild(t);
   }
   document.body.classList.toggle("pre-game", !isGameStarted());
 }
