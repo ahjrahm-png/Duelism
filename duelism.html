@@ -1119,7 +1119,7 @@ const NAMED_CARDS = [
   { name:"Evil", special:false,
     text:"Your opponent gains 1 minor VP and chooses one of their pieces. You choose another of their pieces. Those two pieces put 3 damage on each other." },
   { name:"Life", special:false,
-    text:"Heal 4 HP, split among your pieces however you like. Then you may spend 2 minor VP to take another turn. If your pieces are missing fewer than 4 HP, take another turn instead." },
+    text:"If your pieces are missing fewer than 4 HP in total, take another turn. Otherwise, heal 4 HP split among your pieces as you like; then you may spend 2 minor VP to take another turn." },
   { name:"Good", special:false,
     text:"Your opponent puts 4 damage on their piece with the most HP. If this defeats it, you gain a major VP in a color you don't have yet, chosen by your opponent." },
   { name:"Love", special:true,
@@ -4178,7 +4178,7 @@ function animateTrayHp(el, from, to){
 // The title shows inside the stats tray as each new game begins (while the board's opening flourish
 // plays), then fades out as the players' stats fade in. A loaded or joined game shows stats right away.
 // Bump with every published change; shown small under the title.
-const APP_VERSION = "v1.0";
+const APP_VERSION = "v1.2";
 document.querySelectorAll("h1.trayColTitle .appVersion").forEach(el=>{ el.textContent = APP_VERSION; });
 let gameStartedFlag = false;
 function isGameStarted(){
@@ -5282,7 +5282,7 @@ function showRules(){
     <b>Yin/Yang tiles:</b> each has 3 gems of one color and 1 gem of another — landing there deals 3 damage to the opponent's piece matching the first color and 1 damage to the opponent's piece matching the second.<br><br>
     <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or 2 minor VP if they already hold that color).<br><br>
     <b>Ties:</b> if an effect targets the piece with the most or least HP and pieces are tied, whoever is putting the damage on chooses.<br><br>
-    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil and Law give 1. Life can spend 2 for another turn.<br><br>
+    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil gives 1; Law gives up to 2. Life can spend 2 for another turn.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
     <hr style="border:none;border-top:1px solid rgba(216,178,92,.35);margin:16px 0 12px">
     <b style="color:var(--gold);font-size:1.05em">Puzzle Mode</b><br><br>
@@ -6306,6 +6306,7 @@ function chooseDecision(E0, m, choices, opts){
   if(res.done) return 0;
   const d = res.decision, me = d.p, W = opts.W || DEFAULT_WEIGHTS;
   if(d.opts.length===1) return 0;
+  if(d.kind==="chaos" && opts.chaosRollMs) return chaosRollout(E0, m, choices, d.opts.length, me, W, opts);
   const deadline = opts.timeMs ? Date.now() + opts.timeMs : 0;
   const maxDepth = opts.timeMs ? (opts.maxDepth || 10) : (opts.depth || 2);
   const S = makeSearcher(me, W, deadline, opts);
@@ -6322,6 +6323,37 @@ function chooseDecision(E0, m, choices, opts){
   }
   if(opts.noise>0 && (opts.rng||Math.random)()<opts.noise) return Math.floor((opts.rng||Math.random)()*d.opts.length);
   return bestK;
+}
+
+/* Chaos: which shared colour to give up is a long-range question (who can win that colour back, and
+ * how soon), which the search horizon doesn't see. So each option is played out to the end of the
+ * game several times at Medium strength, round-robin until the time budget runs out, and the option
+ * that wins most often is chosen. Ties go to the earlier option. */
+function chaosRollout(E0, m, choices, n, me, W, opts){
+  const t0 = Date.now(), CFG = { W, depth:2, noise:0.08, ext:1 };
+  const base = opts.rng ? Math.floor(opts.rng()*1e9) : Math.floor(Math.random()*1e9);
+  const play = (T0, mv, ch, r)=>{
+    const o = Object.assign({ rng:r }, CFG);
+    let res;
+    while(true){ res = runTurn(T0, mv.ui, mv.r, mv.c, ch); if(res.done) return res.E; ch.push(chooseDecision(T0, mv, ch, o)); }
+  };
+  const won = new Array(n).fill(0), games = new Array(n).fill(0);
+  for(let j=0; j===0 || Date.now()-t0 < opts.chaosRollMs; j++){
+    for(let k=0;k<n;k++){
+      const r = makeRng(base + j*977 + k*31);
+      let T = play(E0, m, choices.concat(k), r), turns = 0;
+      while(!T.winner && turns<150){
+        const mv = chooseMove(T, Object.assign({ rng:r }, CFG));
+        if(!mv){ T = DE.clone(T); T.current = opp(T.current); DE.startTurn(T); turns++; continue; }
+        T = play(T, mv.move, [], r); turns++;
+      }
+      if(T.winner===me) won[k]++;
+      games[k]++;
+    }
+  }
+  let best = 0;
+  for(let k=1;k<n;k++) if(won[k]/games[k] > won[best]/games[best]) best = k;
+  return best;
 }
 
 const LEVELS = {
@@ -6356,7 +6388,7 @@ const AI_MOVE_OPTS = {
 const AI_DECISION_OPTS = {
   easy:   { depth:1, noise:0.35, ext:0 },
   medium: { depth:2, noise:0.08, ext:1 },
-  hard:   { timeMs:700, maxDepth:12, ext:2 },
+  hard:   { timeMs:700, maxDepth:12, ext:2, chaosRollMs:2500 },   // Chaos colour: ~2.5 s of play-outs
 };
 
 // The search runs in a background worker (built from the two inlined engine scripts) so the page
