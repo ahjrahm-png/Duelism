@@ -1115,7 +1115,7 @@ const NAMED_CARDS = [
     text:"Put 1 damage on each of your opponent's pieces.",
     specialText:"Your opponent's next move puts 1 damage on each of your pieces instead of its normal effect." },
   { name:"Dark", special:false,
-    text:"Choose one of your other pieces. It splits 6 damage evenly among your opponent's pieces in its row and column, then takes 2 damage itself." },
+    text:"Choose one of your other pieces. This piece puts 2 damage on it, then it splits 6 damage evenly among your opponent's pieces in its row and column." },
   { name:"Evil", special:false,
     text:"Your opponent gains 1 minor VP and chooses one of their pieces. You choose another of their pieces. Those two pieces put 3 damage on each other." },
   { name:"Life", special:false,
@@ -1129,11 +1129,10 @@ const NAMED_CARDS = [
   { name:"Death", special:false,
     text:"Put 4 damage on your opponent's piece with the least HP. If this defeats it, it resets with the leftover damage still on it, you gain 2 minor VP instead of a major VP, and you take another turn." },
   { name:"Law", special:true,
-    text:"Make two choices, each one either: gain 1 minor VP, or your opponent loses 1 minor VP.",
+    text:"Your opponent chooses one of their major VP and loses it, then gains 2 minor VP.",
     specialText:"You can only move to Law if you have fewer major VP than your opponent." },
-  { name:"Chaos", special:true,
-    text:"If you and your opponent hold any of the same major VP colors, choose one of them: you both lose that major VP. Take another turn.",
-    specialText:"You can only move to Chaos if you have no other legal move." },
+  { name:"Chaos", special:false,
+    text:"If every piece on the board can heal, each heals 1 HP. Otherwise, each piece puts 1 damage on itself. Take another turn." },
 ];
 
 // Simple single-color line-art per named card, shown below the tile name.
@@ -1317,21 +1316,6 @@ function findLawTile(){
 
 function legalMovesFor(unit){
   let moves = baseLegalMoves(unit);
-  const chaosPos = findChaosTile();
-  if(chaosPos){
-    const hasChaosMove = moves.some(m=>m.r===chaosPos.r && m.c===chaosPos.c);
-    if(hasChaosMove){
-      // Chaos ("You cannot move to Chaos unless you have no other legal moves") is only a
-      // legal destination for this player if NONE of their pieces has a legal move elsewhere.
-      const anyOtherMoveForPlayer = unitsOf(unit.player).some(u=>
-        baseLegalMoves(u).some(m => !(m.r===chaosPos.r && m.c===chaosPos.c))
-      );
-      if(anyOtherMoveForPlayer){
-        moves = moves.filter(m => !(m.r===chaosPos.r && m.c===chaosPos.c));
-      }
-    }
-  }
-
   const lawPos = findLawTile();
   if(lawPos){
     const hasLawMove = moves.some(m=>m.r===lawPos.r && m.c===lawPos.c);
@@ -2153,7 +2137,7 @@ function loseMinorVP(player){
 }
 
 function checkWin(player){
-  if(state.vp[player].major.length>=6){
+  if(!state.winner && state.vp[player].major.length>=6){   // first to 6 wins (Chaos can defeat pieces on both sides)
     state.winner = player;
     logMsg(`<b style="color:var(--gold)">Player ${player} has collected all 6 major VP colors and wins!</b>`);
     switchTimer(null);
@@ -2333,21 +2317,21 @@ function runNamedCard(name, unit){
     }
     case "Dark": {
       const choices = unitsOf(mover).filter(u=>u!==unit);
-      askChoice("Dark", "Choose one of your other pieces to distribute 6 damage (evenly) to opponent pieces sharing its row/column, then take 2 damage itself.",
+      askChoice("Dark", "Choose one of your other pieces. The piece that moved here puts 2 damage on it, then it splits 6 damage evenly among opponent pieces in its row and column.",
         choices.map(u=>({label:`${cw(u.color)} piece (${u.hp} HP)`, value:u, color:COLOR_HEX[u.color]})),
         (chosen)=>{
+          damage(chosen, 2, unit.color, { from: unit });   // the piece that moved here hits the chosen piece first
           const targets = unitsOf(opp).filter(o=>o.r===chosen.r || o.c===chosen.c);
           if(targets.length){
             const each = Math.floor(6/targets.length);
             let rem = 6 - each*targets.length;
             targets.forEach(t=>{ let amt=each; if(rem>0){amt++;rem--;} damage(t, amt, chosen.color, { from: chosen }); });
           }
-          damage(chosen, 2, chosen.color, { from: chosen });   // self-damage: no arc
-          logMsg(`Dark: distributed 6 damage among opponent pieces sharing the chosen piece's row/column; it took 2 damage itself.`);
+          logMsg(`Dark: the chosen piece took 2 damage, then distributed 6 damage among opponent pieces sharing its row/column.`);
           endTurn();
         },
         { confirm: (u)=> unitsOf(opp).some(o=>o.r===u.r || o.c===u.c) ? "" :
-            `Your ${cw(u.color)} piece shares no row or column with an opponent piece, so it will deal <b>no damage</b> — it will still take 2 damage itself.` });
+            `Your ${cw(u.color)} piece shares no row or column with an opponent piece, so it will deal <b>no damage</b> — it will still take 2 damage.` });
       break;
     }
     case "Evil": {
@@ -2523,56 +2507,41 @@ function runNamedCard(name, unit){
       break;
     }
     case "Law": {
-      // Make two choices, each one either: gain 1 minor VP, or your opponent loses 1 minor VP. (Same option order
-      // as the engine: gain, then take. With nothing to take, the point is a gain without asking.) Gaining can
-      // reach 4 and cash in as normal, once the turn ends.
-      const point = (n)=>{
-        if(n > 2){ endTurn(); return; }
-        const apply = (v)=>{
-          if(v === "take"){
-            state.vp[opp].minor -= 1;
-            logMsg(`Law: Player ${opp} loses a minor VP (now ${state.vp[opp].minor}).`);
-          } else {
-            grantMinorVP(mover, null, 1);
-          }
-          render();
-          point(n + 1);
-        };
-        if(state.vp[opp].minor <= 0){ apply("gain"); return; }
-        askChoice(
-          `Law — choice ${n} of 2`,
-          `You have ${state.vp[mover].minor} minor VP; your opponent has ${state.vp[opp].minor}.`,
-          [ { label:"Gain 1 minor VP", value:"gain" },
-            { label:"Your opponent loses 1 minor VP", value:"take" } ],
-          apply, { hideCancel:true });
+      // Your opponent chooses one of their major VP and loses it, then gains 2 minor VP (same option order as the
+      // engine: their majors as held). Reaching 4 cashes in as normal once the turn ends, and the Law player picks.
+      const theirs = state.vp[opp];
+      const name = c=>c.charAt(0).toUpperCase() + c.slice(1);
+      const downgrade = (v)=>{
+        theirs.major.splice(theirs.major.indexOf(v), 1);
+        logMsg(`Law: Player ${opp} loses their ${cw(v)} major VP.`);
+        grantMinorVP(opp, mover, 2);
+        render();
+        endTurn();
       };
-      point(1);
+      // Love can swap a piece onto Law without the gate: if they hold no major there's nothing to downgrade.
+      if(!theirs.major.length){ logMsg(`Law: Player ${opp} has no major VP to lose.`); endTurn(); break; }
+      if(theirs.major.length === 1){ downgrade(theirs.major[0]); break; }
+      switchTimer(opp);
+      askChoice(`Law — Player ${opp}'s Choice`,
+        `Player ${opp}, choose one of your major VP to lose. You gain 2 minor VP in its place (you have ${theirs.minor}).`,
+        theirs.major.map(c=>({ label:`${name(c)}`, value:c, color:MAJOR_HEX[c] })),
+        (v)=>{ switchTimer(mover); downgrade(v); }, { hideCancel:true });
       break;
     }
     case "Chaos": {
-      // If possible, give up one of your major VP to make your opponent lose their major VP of the same color. Take
-      // another turn. Options (same order as the engine): each of your majors that your opponent also holds. With
-      // only one, it happens without asking.
-      const mine = state.vp[mover], theirs = state.vp[opp];
-      const name = c=>c.charAt(0).toUpperCase() + c.slice(1);
-      const shared = mine.major.filter(c=>theirs.major.includes(c));
-      const opts = shared.map(c=>({ label:`${name(c)} — you both lose it`, value:c, color:MAJOR_HEX[c] }));
-      const done = ()=>{ pendingExtraTurn = true; endTurn(); };
-      if(!opts.length){
-        logMsg(`Chaos: no major VP color in common to trade away. Takes another turn.`);
-        done();
-        break;
+      // Each piece on the board puts 1 damage on itself (opponent's pieces first, then yours, as in the engine;
+      // defeats score as normal). Take another turn.
+      // If every piece can heal (none at full HP), each heals 1 instead.
+      if(state.units.every(u=>u.hp<8)){
+        state.units.forEach(u=>heal(u, 1));
+        logMsg(`Chaos: every piece heals 1 HP. Player ${mover} takes another turn.`);
+      } else {
+        unitsOf(opp).forEach(u=>damage(u, 1, u.color, { from: u }));
+        unitsOf(mover).forEach(u=>damage(u, 1, u.color, { from: u }));
+        logMsg(`Chaos: every piece takes 1 damage. Player ${mover} takes another turn.`);
       }
-      const trade = (v)=>{
-          mine.major.splice(mine.major.indexOf(v), 1); theirs.major.splice(theirs.major.indexOf(v), 1);
-          logMsg(`Chaos: Player ${mover} gives up their ${cw(v)} major VP; Player ${opp} loses theirs too. Takes another turn.`);
-          done();
-      };
-      if(opts.length === 1){ trade(opts[0].value); break; }
-      askChoice(
-        "Chaos",
-        "Choose a major VP color you both hold: you both lose that major VP. Then take another turn.",
-        opts, trade, { hideCancel:true });
+      pendingExtraTurn = true;
+      endTurn();
       break;
     }
     default:
@@ -4178,7 +4147,7 @@ function animateTrayHp(el, from, to){
 // The title shows inside the stats tray as each new game begins (while the board's opening flourish
 // plays), then fades out as the players' stats fade in. A loaded or joined game shows stats right away.
 // Bump with every published change; shown small under the title.
-const APP_VERSION = "v1.2";
+const APP_VERSION = "v1.5";
 document.querySelectorAll("h1.trayColTitle .appVersion").forEach(el=>{ el.textContent = APP_VERSION; });
 let gameStartedFlag = false;
 function isGameStarted(){
@@ -5282,7 +5251,7 @@ function showRules(){
     <b>Yin/Yang tiles:</b> each has 3 gems of one color and 1 gem of another — landing there deals 3 damage to the opponent's piece matching the first color and 1 damage to the opponent's piece matching the second.<br><br>
     <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or 2 minor VP if they already hold that color).<br><br>
     <b>Ties:</b> if an effect targets the piece with the most or least HP and pieces are tied, whoever is putting the damage on chooses.<br><br>
-    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil gives 1; Law gives up to 2. Life can spend 2 for another turn.<br><br>
+    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil gives 1; Law turns one of your opponent's major VP into 2 minor VP. Life can spend 2 for another turn.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
     <hr style="border:none;border-top:1px solid rgba(216,178,92,.35);margin:16px 0 12px">
     <b style="color:var(--gold);font-size:1.05em">Puzzle Mode</b><br><br>
@@ -5738,16 +5707,11 @@ function baseLegal(E, ui){
 }
 
 
-// Legal destination squares (r*4+c) for a unit, including the Chaos / Law restrictions.
+// Legal destination squares (r*4+c) for a unit, including the Law restriction (the only gated space).
 function legalMoves(E, ui){
   let moves = baseLegal(E, ui);
   if(moves.length===0) return moves;
   const u = E.units[ui];
-  const chaos = findTile(E, "Chaos");
-  if(chaos>=0 && moves.indexOf(chaos)>=0){
-    const anyOther = IDX[u.p].some(i=>baseLegal(E,i).some(m=>m!==chaos));
-    if(anyOther) moves = moves.filter(m=>m!==chaos);
-  }
   const law = findTile(E, "Law");
   if(law>=0 && moves.indexOf(law)>=0){
     // "You can only move to Law if you have fewer major VP than your opponent."
@@ -5769,7 +5733,7 @@ function readyAll(E, p){
 }
 
 function heal(u, amt){ u.hp = Math.min(8, u.hp + amt); }
-function checkWin(E, p){ if(E.vp[p].maj.length>=6) E.winner = p; }
+function checkWin(E, p){ if(!E.winner && E.vp[p].maj.length>=6) E.winner = p; }   // first to 6 wins
 
 // Minor VP: 4 make a major. Most effects (including a duplicate-colour defeat) give 2; Evil gives 1.
 function grantMinorVP(E, p, chooser, n){
@@ -5887,13 +5851,14 @@ function* named(E, name, ui){
       const choices = mine.filter(i=>i!==ui);
       const k = yield { p:mover, kind:"dark", opts:choices };
       const ch = E.units[choices[k]];
+      // The piece that moved here puts 2 damage on the chosen piece first; then the chosen piece deals the 6.
+      yield* damage(E, choices[k], 2, u.col);
       const targets = theirs.filter(i=>E.units[i].r===ch.r || E.units[i].c===ch.c);
       if(targets.length){
         const each = Math.floor(6/targets.length);
         let rem = 6 - each*targets.length;
         for(const t of targets){ let amt=each; if(rem>0){ amt++; rem--; } yield* damage(E, t, amt, ch.col); }
       }
-      yield* damage(E, choices[k], 2, ch.col);
       yield* endTurn(E);
       break;
     }
@@ -6002,25 +5967,25 @@ function* named(E, name, ui){
       break;
     }
     case "Law": {
-      // Make two choices, each one either: gain 1 minor VP, or your opponent loses 1 minor VP. Options: "gain",
-      // "take" — asked only while the opponent has a minor to lose; otherwise the point is a gain.
-      for(let n=0;n<2;n++){
-        let v = "gain";
-        if(E.vp[o].min > 0){ const k = yield { p:mover, kind:"lawpoint", opts:["gain","take"] }; v = k ? "take" : "gain"; }
-        if(v === "take") E.vp[o].min -= 1; else grantMinorVP(E, mover, null, 1);
+      // Your opponent chooses one of their major VP and loses it, then gains 2 minor VP. (Gate: you have fewer
+      // majors, so they always hold one.) Reaching 4 cashes in as normal at the end of the turn, Law player picks.
+      // Love can swap a piece onto Law without the gate: if they hold no major there's nothing to downgrade.
+      const held = E.vp[o].maj;
+      if(held.length){
+        const k = held.length > 1 ? (yield { p:o, kind:"lawmajor", opts:held.slice() }) : 0;
+        held.splice(k, 1);
+        grantMinorVP(E, o, mover, 2);
       }
       yield* endTurn(E);
       break;
     }
     case "Chaos": {
-      // If possible, give up one of your major VP to make your opponent lose their major VP of the same color.
-      // Take another turn. Options: your majors they also hold (asked only when there's more than one).
-      const mv = E.vp[mover], ov = E.vp[o];
-      const opts = mv.maj.filter(c=>ov.maj.indexOf(c)>=0);
-      if(opts.length){
-        const k = opts.length > 1 ? (yield { p:mover, kind:"chaos", opts }) : 0;
-        const v = opts[k];
-        mv.maj.splice(mv.maj.indexOf(v), 1); ov.maj.splice(ov.maj.indexOf(v), 1);
+      // If every piece on the board can heal (none at full HP), each heals 1. Otherwise each puts 1 damage on
+      // itself (your opponent's first, then yours; normal defeat scoring). Take another turn.
+      if(E.units.every(x=>x.hp<8)) E.units.forEach(x=>heal(x, 1));
+      else {
+        for(const i of theirs) yield* damage(E, i, 1, E.units[i].col);
+        for(const i of mine) yield* damage(E, i, 1, E.units[i].col);
       }
       E.extra = true;
       yield* endTurn(E);
@@ -6052,6 +6017,7 @@ const api = { clone, newGameState, legalMoves, allMoves, runTurn, startTurn, tot
 if(typeof module!=="undefined" && module.exports) module.exports = api;
 root.DuelEngine = api;
 })(typeof globalThis!=="undefined" ? globalThis : this);
+
 </script>
 <script id="duelAiSrc">
 /* Duelism computer opponent: alpha-beta search over whole turns on top of the pure rules engine
@@ -6306,7 +6272,6 @@ function chooseDecision(E0, m, choices, opts){
   if(res.done) return 0;
   const d = res.decision, me = d.p, W = opts.W || DEFAULT_WEIGHTS;
   if(d.opts.length===1) return 0;
-  if(d.kind==="chaos" && opts.chaosRollMs) return chaosRollout(E0, m, choices, d.opts.length, me, W, opts);
   const deadline = opts.timeMs ? Date.now() + opts.timeMs : 0;
   const maxDepth = opts.timeMs ? (opts.maxDepth || 10) : (opts.depth || 2);
   const S = makeSearcher(me, W, deadline, opts);
@@ -6323,37 +6288,6 @@ function chooseDecision(E0, m, choices, opts){
   }
   if(opts.noise>0 && (opts.rng||Math.random)()<opts.noise) return Math.floor((opts.rng||Math.random)()*d.opts.length);
   return bestK;
-}
-
-/* Chaos: which shared colour to give up is a long-range question (who can win that colour back, and
- * how soon), which the search horizon doesn't see. So each option is played out to the end of the
- * game several times at Medium strength, round-robin until the time budget runs out, and the option
- * that wins most often is chosen. Ties go to the earlier option. */
-function chaosRollout(E0, m, choices, n, me, W, opts){
-  const t0 = Date.now(), CFG = { W, depth:2, noise:0.08, ext:1 };
-  const base = opts.rng ? Math.floor(opts.rng()*1e9) : Math.floor(Math.random()*1e9);
-  const play = (T0, mv, ch, r)=>{
-    const o = Object.assign({ rng:r }, CFG);
-    let res;
-    while(true){ res = runTurn(T0, mv.ui, mv.r, mv.c, ch); if(res.done) return res.E; ch.push(chooseDecision(T0, mv, ch, o)); }
-  };
-  const won = new Array(n).fill(0), games = new Array(n).fill(0);
-  for(let j=0; j===0 || Date.now()-t0 < opts.chaosRollMs; j++){
-    for(let k=0;k<n;k++){
-      const r = makeRng(base + j*977 + k*31);
-      let T = play(E0, m, choices.concat(k), r), turns = 0;
-      while(!T.winner && turns<150){
-        const mv = chooseMove(T, Object.assign({ rng:r }, CFG));
-        if(!mv){ T = DE.clone(T); T.current = opp(T.current); DE.startTurn(T); turns++; continue; }
-        T = play(T, mv.move, [], r); turns++;
-      }
-      if(T.winner===me) won[k]++;
-      games[k]++;
-    }
-  }
-  let best = 0;
-  for(let k=1;k<n;k++) if(won[k]/games[k] > won[best]/games[best]) best = k;
-  return best;
 }
 
 const LEVELS = {
@@ -6388,7 +6322,7 @@ const AI_MOVE_OPTS = {
 const AI_DECISION_OPTS = {
   easy:   { depth:1, noise:0.35, ext:0 },
   medium: { depth:2, noise:0.08, ext:1 },
-  hard:   { timeMs:700, maxDepth:12, ext:2, chaosRollMs:2500 },   // Chaos colour: ~2.5 s of play-outs
+  hard:   { timeMs:700, maxDepth:12, ext:2 },
 };
 
 // The search runs in a background worker (built from the two inlined engine scripts) so the page
@@ -6400,35 +6334,14 @@ function aiGetWorker(){
     const src = document.getElementById("duelEngineSrc").textContent + "\n" + document.getElementById("duelAiSrc").textContent +
       "\nonmessage=function(e){ var d=e.data, r=null; try{ r = d.type==='move' ? DuelAI.chooseMove(d.S, d.opts) : DuelAI.chooseDecision(d.S, d.mv, d.choices, d.opts); }catch(err){ r={error:String(err)}; } postMessage({id:d.id, r:r}); };";
     aiWorker = new Worker(URL.createObjectURL(new Blob([src], {type:"text/javascript"})));
-    aiWorker.onerror = ()=>{ aiWorker = false; aiFlushPendingInline(); };
-    aiWorker.addEventListener("message", ()=>{ aiPending = []; });   // it works: drop the inline fallbacks
+    aiWorker.onerror = ()=>{ aiWorker = false; };
   }catch(err){ aiWorker = false; }
   return aiWorker;
 }
 function aiComputeSync(req){
   return req.type==="move" ? DuelAI.chooseMove(req.S, req.opts) : DuelAI.chooseDecision(req.S, req.mv, req.choices, req.opts);
 }
-// Resolves once every firing glow and beam has finished fading. If the computer has to think on the
-// page itself (background workers blocked, e.g. in some previews), that thinking freezes anything still
-// animating — so it never starts while an effect is on screen.
-function whenEffectsQuiet(){
-  return new Promise(res=>{
-    const check = ()=>{
-      const left = arcFxUntil - performance.now();
-      const busy = document.querySelector("#arcGlowLayer .arcGlow, #arcLayer g, #arcLayer path.arc-reveal");
-      if(left > 0) setTimeout(check, left + 20);
-      else if(busy && left > -1500) setTimeout(check, 60);
-      else requestAnimationFrame(()=>requestAnimationFrame(res));   // let the cleared frame paint first
-    };
-    check();
-  });
-}
-let aiPending = [];
-function aiFlushPendingInline(){ const p = aiPending; aiPending = []; p.forEach(f=>f()); }
 function aiCompute(req){
-  return whenEffectsQuiet().then(()=>aiComputeNow(req));
-}
-function aiComputeNow(req){
   return new Promise(resolve=>{
     const w = aiGetWorker();
     if(!w){ let r=null; try{ r = aiComputeSync(req); }catch(e){ console.error(e); } resolve(r); return; }
@@ -6438,10 +6351,8 @@ function aiComputeNow(req){
     const onMsg = (e)=>{ if(e.data && e.data.id===id){
       if(e.data.r && e.data.r.error){ let r=null; try{ r = aiComputeSync(req); }catch(_){} finish(r); } else finish(e.data.r); } };
     w.addEventListener("message", onMsg);
-    const inline = ()=>{ if(!done){ let r=null; try{ r = aiComputeSync(req); }catch(_){} finish(r); } };
-    aiPending.push(inline);                      // if the worker turns out to be blocked, answer right away
     // safety net: if the worker never answers, compute inline
-    setTimeout(inline, 8000);
+    setTimeout(()=>{ if(!done){ let r=null; try{ r = aiComputeSync(req); }catch(_){} finish(r); } }, 8000);
     try{ w.postMessage(Object.assign({ id }, req)); }catch(err){ aiWorker = false; let r=null; try{ r = aiComputeSync(req); }catch(_){} finish(r); }
   });
 }
@@ -6481,8 +6392,8 @@ function aiSchedule(){
 
 function aiPlay(t){
   if(!aiIsComputersTurn()) return;
-  // wait for any open popup (e.g. a notice the human is reading) or beams still landing before moving
-  if(document.getElementById("modalRoot").children.length || (typeof arcWaitMs==="function" && arcWaitMs()>0)){ setTimeout(()=>{ if(t===aiToken) aiPlay(t); }, 400); return; }
+  // wait for any open popup (e.g. a notice the human is reading) before moving
+  if(document.getElementById("modalRoot").children.length){ setTimeout(()=>{ if(t===aiToken) aiPlay(t); }, 400); return; }
   aiSetThinking(true);
   const started = Date.now();
   aiCompute({ type:"move", S:aiToEngine(), opts:Object.assign({ W:DuelAI.DEFAULT_WEIGHTS }, AI_MOVE_OPTS[aiMode.level]) }).then(res=>{
@@ -6538,8 +6449,6 @@ function aiAfterThink(t, res){
 
   const _askChoice = askChoice;
   askChoice = function(title, desc, options, onPick, opts={}){
-    // wait for any damage beams still in flight before showing (or auto-answering) the popup
-    if(typeof arcWaitMs==="function"){ const w = arcWaitMs(); if(w > 0){ setTimeout(()=>askChoice(title, desc, options, onPick, opts), w + 20); return; } }
     const mirror = aiMirror;
     if(!aiMode.enabled || !mirror || mirror.broken || opts.noPeek) return _askChoice(title, desc, options, onPick, opts);
     let d = null;
