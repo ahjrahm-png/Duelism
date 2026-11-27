@@ -1119,7 +1119,7 @@ const NAMED_CARDS = [
   { name:"Evil", special:false,
     text:"Your opponent gains 1 minor VP and chooses one of their pieces. You choose another of their pieces. Those two pieces put 3 damage on each other." },
   { name:"Life", special:false,
-    text:"If your pieces are missing fewer than 4 HP in total, take another turn. Otherwise, heal 4 HP split among your pieces as you like; then you may spend 2 minor VP to take another turn." },
+    text:"Choose one: heal 4 HP split among your pieces, or spend 1 minor VP to heal 2 HP split among your pieces and take another turn. If your pieces are at full HP, take another turn instead." },
   { name:"Good", special:false,
     text:"Your opponent puts 4 damage on their piece with the most HP. If this defeats it, you gain a major VP in a color you don't have yet, chosen by your opponent." },
   { name:"Love", special:true,
@@ -2354,40 +2354,30 @@ function runNamedCard(name, unit){
       break;
     }
     case "Life": {
-      const totalCapacity = unitsOf(mover).reduce((sum,u)=>sum + (8-u.hp), 0);
-      if(totalCapacity < 4){
-        logMsg(`Life: not enough missing HP among your pieces to distribute all 4 — automatically takes another turn instead.`);
+      // Full HP: take another turn (automatic). Otherwise choose one: heal 4 HP split among your pieces, or spend
+      // 1 minor VP to heal 2 HP and take another turn (offered only with a minor to spend). Same option order as
+      // the engine. Healing stops early if the pieces fill up.
+      const missing = unitsOf(mover).reduce((sum,u)=>sum + (8-u.hp), 0);
+      if(missing === 0){
+        logMsg(`Life: your pieces are at full HP — takes another turn.`);
         pendingExtraTurn = true;
         endTurn();
-      } else {
-        distributeHP(mover, 4, ()=>{
-          const bucket = state.vp[mover];
-          if(bucket.minor >= 2){
-            askChoice(
-              "Life — Take Another Turn?",
-              `You've distributed all 4 HP. Spend 2 minor VP to take another turn? (You have ${bucket.minor}.)`,
-              [
-                { label:"Yes — spend 2 minor VP, take another turn", value:"yes" },
-                { label:"No — keep them, end turn normally", value:"no" },
-              ],
-              (choice)=>{
-                if(choice==="yes"){
-                  loseMinorVP(mover);
-                  pendingExtraTurn = true;
-                  logMsg(`Life: spent 2 minor VP to take another turn.`);
-                } else {
-                  logMsg(`Life: kept their minor VP; turn ends normally.`);
-                }
-                endTurn();
-              },
-              { hideCancel:true }
-            );
-          } else {
-            logMsg(`Life: distributed all 4 HP. Not enough minor VP (2 needed) to spend for another turn.`);
-            endTurn();
-          }
-        });
+        break;
       }
+      const bucket = state.vp[mover];
+      const heal4 = ()=> distributeHP(mover, 4, ()=>{ logMsg(`Life: healed up to 4 HP.`); endTurn(); });
+      const pay = ()=>{
+        bucket.minor -= 1;
+        pendingExtraTurn = true;
+        logMsg(`Life: spent 1 minor VP (now ${bucket.minor}) to heal 2 HP and take another turn.`);
+        render();
+        distributeHP(mover, 2, ()=>endTurn());
+      };
+      if(bucket.minor < 1){ heal4(); break; }
+      askChoice("Life", `Choose one. (You have ${bucket.minor} minor VP; your pieces are missing ${missing} HP.)`,
+        [ { label:"Heal 4 HP split among your pieces", value:"heal4" },
+          { label:"Spend 1 minor VP: heal 2 HP and take another turn", value:"pay" } ],
+        (v)=>{ if(v==="pay") pay(); else heal4(); }, { hideCancel:true });
       break;
     }
     case "Good": {
@@ -4147,7 +4137,7 @@ function animateTrayHp(el, from, to){
 // The title shows inside the stats tray as each new game begins (while the board's opening flourish
 // plays), then fades out as the players' stats fade in. A loaded or joined game shows stats right away.
 // Bump with every published change; shown small under the title.
-const APP_VERSION = "v1.5";
+const APP_VERSION = "v1.6";
 document.querySelectorAll("h1.trayColTitle .appVersion").forEach(el=>{ el.textContent = APP_VERSION; });
 let gameStartedFlag = false;
 function isGameStarted(){
@@ -5251,7 +5241,7 @@ function showRules(){
     <b>Yin/Yang tiles:</b> each has 3 gems of one color and 1 gem of another — landing there deals 3 damage to the opponent's piece matching the first color and 1 damage to the opponent's piece matching the second.<br><br>
     <b>Defeat:</b> a piece hits 0 HP → resets to 8 HP, opponent gains a major VP (or 2 minor VP if they already hold that color).<br><br>
     <b>Ties:</b> if an effect targets the piece with the most or least HP and pieces are tied, whoever is putting the damage on chooses.<br><br>
-    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil gives 1; Law turns one of your opponent's major VP into 2 minor VP. Life can spend 2 for another turn.<br><br>
+    <b>Minor VP:</b> 4 minor VP auto-convert into a major VP of a color you lack, chosen by your opponent; any extra carry over. Effects that give minor VP: a duplicate-color defeat and Death give 2; Evil gives 1; Law turns one of your opponent's major VP into 2 minor VP. Life can spend 1 for another turn.<br><br>
     <b>Win:</b> collect all 6 major VP colors.
     <hr style="border:none;border-top:1px solid rgba(216,178,92,.35);margin:16px 0 12px">
     <b style="color:var(--gold);font-size:1.05em">Puzzle Mode</b><br><br>
@@ -5876,25 +5866,27 @@ function* named(E, name, ui){
       break;
     }
     case "Life": {
-      const cap = mine.reduce((s,i)=>s + (8-E.units[i].hp), 0);
-      if(cap < 4){
+      // Full HP: take another turn (automatic). Otherwise choose one: heal 4 HP split among your pieces, or spend
+      // 1 minor VP to heal 2 HP split among your pieces and take another turn (offered only with a minor to spend).
+      // Healing stops early if your pieces fill up. Options: "heal4", "pay".
+      const missing = mine.reduce((s,i)=>s + (8-E.units[i].hp), 0);
+      if(missing === 0){
         E.extra = true;
         yield* endTurn(E);
-      } else {
-        let remaining = 4;
-        while(true){
-          const pieces = mine.filter(i=>E.units[i].hp<8);
-          if(pieces.length===0 || remaining<=0) break;
-          const k = yield { p:mover, kind:"life", opts:pieces };
-          heal(E.units[pieces[k]], 1);
-          remaining--;
-        }
-        if(E.vp[mover].min >= 2){
-          const k = yield { p:mover, kind:"lifeturn", opts:["yes","no"] };
-          if(k===0){ loseMinorVP(E, mover); E.extra = true; }
-        }
-        yield* endTurn(E);
+        break;
       }
+      let pay = false;
+      if(E.vp[mover].min >= 1){ const k = yield { p:mover, kind:"lifemode", opts:["heal4","pay"] }; pay = k===1; }
+      if(pay){ E.vp[mover].min -= 1; E.extra = true; }
+      let remaining = pay ? 2 : 4;
+      while(remaining > 0){
+        const pieces = mine.filter(i=>E.units[i].hp<8);
+        if(pieces.length===0) break;
+        const k = yield { p:mover, kind:"life", opts:pieces };
+        heal(E.units[pieces[k]], 1);
+        remaining--;
+      }
+      yield* endTurn(E);
       break;
     }
     case "Good": {
